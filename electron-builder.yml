@@ -1,0 +1,19 @@
+appId: com.ibianqian.buglist
+productName: 任务清单
+directories:
+  output: pack814
+  buildResources: build
+files:
+  - server.js
+  - public/**/*
+  - electron/**/*
+  - package.json
+  - node_modules/**/*
+  - data.json
+win:
+  target: portable
+portable:
+  artifactName: 任务清单.exe
+extraResources: []
+asar:
+  smartUnpack: true
