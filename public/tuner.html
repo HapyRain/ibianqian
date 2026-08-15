@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>任务清单 - 在线调色台</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body {
+    font-family: 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+    background: #20202a;
+    color: #d8d8e0;
+    display: flex;
+    overflow: hidden;
+  }
+  /* 左侧预览区 */
+  #preview-wrap { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+  #preview-head {
+    display: flex; align-items: center; gap: 12px;
+    padding: 8px 14px;
+    background: #2a2a36;
+    border-bottom: 1px solid #3a3a48;
+    font-size: 13px; color: #9a9aa8;
+  }
+  #preview-head .dot { width: 8px; height: 8px; border-radius: 50%; background: #4cb782; }
+  #preview { flex: 1; width: 100%; border: 0; background: #fff; }
+
+  /* 右侧控制面板 */
+  #panel {
+    width: 348px; flex: none; overflow-y: auto;
+    background: #26262f;
+    border-left: 1px solid #3a3a48;
+    padding: 14px 16px 20px;
+  }
+  #panel h1 { font-size: 15px; color: #fff; margin-bottom: 4px; }
+  #panel .sub { font-size: 12px; color: #8a8a98; margin-bottom: 14px; line-height: 1.5; }
+  .section-title {
+    font-size: 12px; color: #6f6f80; text-transform: uppercase; letter-spacing: .08em;
+    margin: 18px 0 8px; border-bottom: 1px solid #33333f; padding-bottom: 5px;
+  }
+  .row { display: flex; align-items: center; gap: 8px; margin-bottom: 7px; }
+  .row label { flex: 1; font-size: 12.5px; color: #c6c6d2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .row input[type=color] {
+    width: 34px; height: 26px; padding: 0; border: 1px solid #4a4a58; border-radius: 6px;
+    background: none; cursor: pointer;
+  }
+  .row .hex {
+    width: 74px; font-size: 12px; color: #a0a0b0; background: #1e1e26;
+    border: 1px solid #3a3a48; border-radius: 6px; padding: 4px 6px; text-align: center;
+  }
+  .row input[type=range] { flex: 1; accent-color: #7b83f2; }
+  .row .val { width: 44px; text-align: right; font-size: 12px; color: #a0a0b0; }
+  .btn-group { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+  .theme-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .theme-card {
+    display: flex; align-items: center; gap: 8px;
+    border: 1px solid #45455a; background: #30303c; color: #d8d8e0;
+    border-radius: 8px; padding: 8px 10px; font-size: 12.5px; cursor: pointer;
+    transition: border-color .15s ease, background .15s ease;
+  }
+  .theme-card:hover { background: #3b3b4a; border-color: #6a6a80; }
+  .theme-card.active { border-color: #7b83f2; background: #3a3d58; color: #fff; }
+  .tc-swatch { display: flex; gap: 3px; flex: none; }
+  .tc-swatch span { width: 14px; height: 14px; border-radius: 50%; border: 1px solid rgba(255,255,255,.25); }
+  .tc-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .btn {
+    border: 1px solid #45455a; background: #30303c; color: #d8d8e0;
+    border-radius: 7px; padding: 5px 10px; font-size: 12px; cursor: pointer;
+    transition: background .15s ease;
+  }
+  .btn:hover { background: #3b3b4a; }
+  .btn.active { background: #5e6ad2; border-color: #5e6ad2; color: #fff; }
+  textarea {
+    width: 100%; height: 150px; margin-top: 8px;
+    background: #1a1a22; color: #b8d9b8; border: 1px solid #3a3a48; border-radius: 8px;
+    font-family: Consolas, monospace; font-size: 11px; padding: 8px; resize: vertical;
+  }
+  .hint { font-size: 11px; color: #8a8a98; margin-top: 6px; line-height: 1.6; }
+  .ok-copy { margin-top: 6px; }
+</style>
+</head>
+<body>
+  <div id="preview-wrap">
+    <div id="preview-head">
+      <span class="dot"></span>
+      <span>实时预览（iframe 内即为真实应用）—— 改动即时生效，不会写入任何文件</span>
+    </div>
+    <iframe id="preview" src="/"></iframe>
+  </div>
+
+  <div id="panel">
+    <h1>在线调色台</h1>
+    <div class="sub">改动仅作用于左侧预览（注入 CSS 变量覆盖）。调好后点「复制导出」，把内容发给我，我写回 style.css。</div>
+
+    <div class="section-title">主题（10 套 · 点选预览）</div>
+    <div class="theme-grid" id="theme-grid"></div>
+
+    <div class="section-title">高级微调（可选）</div>
+    <div class="row"><label title="窗口背板">窗口底色</label><input type="color" id="bg"><input class="hex" id="bg-hex"></div>
+    <div class="row"><label title="面板/行底色">面板 / 行</label><input type="color" id="surface"><input class="hex" id="surface-hex"></div>
+    <div class="row"><label title="弹窗/悬浮/高亮">弹窗 / 高亮</label><input type="color" id="surface-hi"><input class="hex" id="surface-hi-hex"></div>
+    <div class="row"><label title="头部/工具栏材质">头栏材质</label>
+      <select id="header-bg" style="flex:1;background:#1e1e26;color:#d8d8e0;border:1px solid #3a3a48;border-radius:6px;padding:4px 6px;font-size:12px;">
+        <option value="mica">毛玻璃白（现状）</option>
+        <option value="solid-hi" selected>纯色 · 弹窗色（推荐）</option>
+        <option value="solid-surface">纯色 · 面板色</option>
+      </select>
+    </div>
+
+    <div class="section-title">文字与线条</div>
+    <div class="row"><label>正文文字</label><input type="color" id="text"><input class="hex" id="text-hex"></div>
+    <div class="row"><label>次要文字</label><input type="color" id="text-2"><input class="hex" id="text-2-hex"></div>
+    <div class="row"><label>发丝线</label><input type="color" id="line"><input class="hex" id="line-hex"></div>
+    <div class="row"><label>行分隔线</label><input type="color" id="line-soft"><input class="hex" id="line-soft-hex"></div>
+
+    <div class="section-title">强调色</div>
+    <div class="row"><label>主色（按钮/标签）</label><input type="color" id="primary"><input class="hex" id="primary-hex"></div>
+    <div class="row"><label>危险 / 删除</label><input type="color" id="danger"><input class="hex" id="danger-hex"></div>
+    <div class="row"><label>成功 / 已完成</label><input type="color" id="ok"><input class="hex" id="ok-hex"></div>
+    <div class="row"><label>警告 / 修复中</label><input type="color" id="warn"><input class="hex" id="warn-hex"></div>
+
+    <div class="section-title">立体感</div>
+    <div class="row"><label>阴影强度</label><input type="range" id="shadow" min="0" max="200" value="120"><span class="val" id="shadow-val">120%</span></div>
+    <div class="row"><label>行圆角</label><input type="range" id="radius" min="4" max="22" value="11"><span class="val" id="radius-val">11px</span></div>
+
+    <div class="btn-group" style="margin-top:10px;">
+      <button class="btn" id="btn-reset">恢复默认</button>
+      <button class="btn ok-copy" id="btn-copy">复制导出 CSS</button>
+    </div>
+    <div class="section-title">导出（发给助手写回 style.css）</div>
+    <textarea id="export" readonly spellcheck="false"></textarea>
+    <div class="hint">导出的内容包含 :root 变量 + 行阴影/头栏等结构性覆盖，可直接替换 style.css 对应区块。</div>
+  </div>
+
+  <script src="themes.js"></script>
+<script>
+(function () {
+  'use strict';
+  var iframe = document.getElementById('preview');
+  var $ = function (id) { return document.getElementById(id); };
+
+  var THEMES = window.BUGLIST_THEMES || [];
+
+  // 主题 → 面板值
+  function loadThemeVals(t) {
+    return {
+      bg: t.vars.bg, surface: t.vars.surface, 'surface-hi': t.vars['surface-hi'],
+      line: t.vars.line, 'line-soft': t.vars['line-soft'],
+      text: t.vars.text, 'text-2': t.vars['text-2'],
+      primary: t.vars.primary, danger: t.vars.danger, ok: t.vars.ok, warn: t.vars.warn,
+      'header-bg': t.headerBg || 'solid-hi',
+      shadow: t.shadow || 120,
+      radius: t.radius || 11
+    };
+  }
+
+  // 默认 = 第一套主题（纸面暖调）
+  var DEFAULTS = THEMES.length ? loadThemeVals(THEMES[0]) : {
+    bg: '#E6E0D1', surface: '#F7F3E8', 'surface-hi': '#FEFBF2',
+    line: '#D5CEBB', 'line-soft': '#E3DCCB',
+    text: '#26221B', 'text-2': '#7D7666',
+    primary: '#5E6AD2', danger: '#E5484D', ok: '#3FA06E', warn: '#B98A1E',
+    'header-bg': 'solid-hi', shadow: 140, radius: 12
+  };
+
+  var KEYS = ['bg', 'surface', 'surface-hi', 'line', 'line-soft', 'text', 'text-2', 'primary', 'danger', 'ok', 'warn'];
+
+  function bindColor(key) {
+    var input = $(key), hex = $(key + '-hex');
+    input.addEventListener('input', function () {
+      hex.value = input.value.toUpperCase();
+      apply();
+    });
+    hex.addEventListener('change', function () {
+      var v = hex.value.trim().toUpperCase();
+      if (/^#[0-9A-F]{6}$/.test(v)) { input.value = v; apply(); }
+    });
+    return input;
+  }
+
+  function readVals() {
+    var v = {};
+    KEYS.forEach(function (k) { v[k] = $(k).value; });
+    v['header-bg'] = $('header-bg').value;
+    v.shadow = parseInt($('shadow').value, 10);
+    v.radius = parseInt($('radius').value, 10);
+    return v;
+  }
+
+  function writeVals(v) {
+    KEYS.forEach(function (k) { $(k).value = v[k]; $(k + '-hex').value = v[k].toUpperCase(); });
+    $('header-bg').value = v['header-bg'];
+    $('shadow').value = v.shadow; $('shadow-val').textContent = v.shadow + '%';
+    $('radius').value = v.radius; $('radius-val').textContent = v.radius + 'px';
+  }
+
+  function hexToRgb(hex) {
+    var n = parseInt(hex.slice(1), 16);
+    return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+  }
+
+  // 阴影按强度缩放 alpha（s = 强度倍数）
+  function shadowCss(s) {
+    var a = function (base) { return Math.min(1, +(base * s).toFixed(3)); };
+    return {
+      card: '0 1px 2px rgba(0,0,0,' + a(0.05) + '), 0 2px 8px rgba(0,0,0,' + a(0.07) + '), 0 0 0 1px rgba(0,0,0,' + a(0.03) + ')',
+      hover: '0 2px 5px rgba(0,0,0,' + a(0.06) + '), 0 8px 22px rgba(0,0,0,' + a(0.12) + ')',
+      dialog: '0 0 0 1px rgba(0,0,0,' + a(0.05) + '), 0 10px 30px rgba(0,0,0,' + a(0.15) + '), 0 30px 70px rgba(0,0,0,' + a(0.11) + ')'
+    };
+  }
+
+  function buildCss(v) {
+    var s = v.shadow / 100;
+    var sh = shadowCss(s);
+    var headerBg;
+    if (v['header-bg'] === 'mica') headerBg = 'rgba(255,255,255,0.72)';
+    else if (v['header-bg'] === 'solid-hi') headerBg = 'var(--surface-hi)';
+    else headerBg = 'var(--surface)';
+    var lines = [];
+    lines.push(':root {');
+    lines.push('  --bg: ' + v.bg + ';');
+    lines.push('  --surface: ' + v.surface + ';');
+    lines.push('  --surface-hi: ' + v['surface-hi'] + ';');
+    lines.push('  --line: ' + v.line + ';');
+    lines.push('  --line-soft: ' + v['line-soft'] + ';');
+    lines.push('  --text: ' + v.text + ';');
+    lines.push('  --text-2: ' + v['text-2'] + ';');
+    lines.push('  --primary: ' + v.primary + ';');
+    lines.push('  --danger: ' + v.danger + ';');
+    lines.push('  --ok: ' + v.ok + ';');
+    lines.push('  --warn: ' + v.warn + ';');
+    lines.push('  --shadow-card: ' + sh.card + ';');
+    lines.push('  --shadow-hover: ' + sh.hover + ';');
+    lines.push('  --shadow-dialog: ' + sh.dialog + ';');
+    lines.push('  --radius: ' + v.radius + 'px;');
+    lines.push('}');
+    lines.push('');
+    lines.push('/* 结构性覆盖：让行/区块真正"立起来" */');
+    lines.push('.app-header, .task-tabs-bar { background: ' + headerBg + '; border-color: var(--line); }');
+    lines.push('.bug-panel { background: var(--surface); border-color: var(--line-soft); box-shadow: var(--shadow-card); }');
+    lines.push('.search-bar { background: var(--surface-hi); border-color: var(--line-soft); }');
+    lines.push('.bug-row { box-shadow: var(--shadow-card); }');
+    lines.push('.bug-row:hover { box-shadow: var(--shadow-hover); }');
+    lines.push('.bug-row-spotlight { box-shadow: 0 0 0 4px rgba(255,255,255,.7), 0 6px 22px rgba(0,0,0,.22) !important; }');
+    return lines.join('\n');
+  }
+
+  function apply() {
+    var v = readVals();
+    $('export').value = buildCss(v);
+    var doc = iframe.contentDocument;
+    if (!doc) return;
+    var st = doc.getElementById('tuner-style');
+    if (!st) { st = doc.createElement('style'); st.id = 'tuner-style'; doc.head.appendChild(st); }
+    st.textContent = buildCss(v);
+  }
+
+  // 事件绑定
+  KEYS.forEach(bindColor);
+  $('header-bg').addEventListener('change', apply);
+  ['shadow', 'radius'].forEach(function (id) {
+    $(id).addEventListener('input', function () {
+      $(id + '-val').textContent = $(id).value + (id === 'shadow' ? '%' : 'px');
+      apply();
+    });
+  });
+
+  $('btn-reset').addEventListener('click', function () { writeVals(DEFAULTS); apply(); });
+
+  // 主题网格：点选即预览
+  var grid = $('theme-grid');
+  THEMES.forEach(function (t) {
+    var b = document.createElement('button');
+    b.className = 'theme-card';
+    b.title = t.desc || t.name;
+    b.innerHTML = '<span class="tc-swatch">' +
+      '<span style="background:' + t.vars.bg + '"></span>' +
+      '<span style="background:' + t.vars.surface + '"></span>' +
+      '<span style="background:' + t.vars.primary + '"></span>' +
+      '</span><span class="tc-name">' + t.name + '</span>';
+    b.addEventListener('click', function () {
+      writeVals(loadThemeVals(t)); apply();
+      grid.querySelectorAll('.theme-card').forEach(function (x) { x.classList.remove('active'); });
+      b.classList.add('active');
+    });
+    grid.appendChild(b);
+  });
+
+  $('btn-copy').addEventListener('click', function () {
+    var btn = this;
+    var ta = $('export');
+    ta.select();
+    if (navigator.clipboard) navigator.clipboard.writeText(ta.value);
+    var old = btn.textContent;
+    btn.textContent = '已复制 ✓';
+    setTimeout(function () { btn.textContent = old; }, 1200);
+  });
+
+  iframe.addEventListener('load', function () { apply(); });
+  // 初始化
+  writeVals(DEFAULTS);
+  apply();
+})();
+</script>
+</body>
+</html>

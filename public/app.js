@@ -27,6 +27,146 @@
       console.log('[Init] writeBackup 可用:', typeof window.electronAPI?.writeBackup);
       console.log('[Init] getLocalIp 可用:', typeof window.electronAPI?.getLocalIp);
 
+      // ==================== 主题（10 套成品，仅本机生效，localStorage 持久化） ====================
+      const themes = window.BUGLIST_THEMES || [];
+      const THEME_KEY = 'buglist_theme';
+      const themeId = ref((function () {
+        try {
+          const saved = localStorage.getItem(THEME_KEY);
+          if (saved && themes.some(t => t.id === saved)) return saved;
+        } catch (e) { /* 忽略 */ }
+        return themes.length ? themes[0].id : '';
+      })());
+      /** 主题选择面板可见性 */
+      const themeMenuVisible = ref(false);
+      /** 主题面板 fixed 坐标（点击按钮时按按钮位置计算，右缘对齐） */
+      const themeMenuX = ref(0);
+      const themeMenuY = ref(0);
+
+      /**
+       * 切换主题面板：记录按钮位置作为面板锚点（面板宽 230px，右缘对齐按钮右缘）
+       */
+      function toggleThemeMenu(e) {
+        themeMenuVisible.value = !themeMenuVisible.value;
+        if (themeMenuVisible.value && e && e.currentTarget) {
+          const r = e.currentTarget.getBoundingClientRect();
+          themeMenuX.value = Math.max(8, Math.round(r.right - 230));
+          themeMenuY.value = Math.min(Math.round(r.bottom + 8), Math.max(8, window.innerHeight - 120));
+        }
+      }
+
+      // ==================== 更多菜单（导出 / 导入） ====================
+      const moreMenuVisible = ref(false);
+      const moreMenuX = ref(0);
+      const moreMenuY = ref(0);
+      /** 隐藏的导入文件选择器 */
+      const importFileInput = ref(null);
+
+      function toggleMoreMenu(e) {
+        moreMenuVisible.value = !moreMenuVisible.value;
+        if (moreMenuVisible.value && e && e.currentTarget) {
+          const r = e.currentTarget.getBoundingClientRect();
+          moreMenuX.value = Math.max(8, Math.round(r.right - 190));
+          moreMenuY.value = Math.min(Math.round(r.bottom + 8), Math.max(8, window.innerHeight - 120));
+        }
+      }
+
+      /**
+       * 导出数据：拉取 /api/export 并下载 JSON 备份
+       */
+      async function exportData() {
+        moreMenuVisible.value = false;
+        try {
+          const resp = await fetch(apiUrl('/api/export'));
+          const data = await resp.json();
+          const stamp = formatTimestamp(new Date()).replace(/[: ]/g, '-');
+          const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = `任务清单备份-${stamp}.json`;
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+          URL.revokeObjectURL(url);
+          ElementPlus.ElMessage.success('已导出数据备份（图片在服务端 uploads/ 目录）');
+        } catch (err) {
+          console.error('[Export] 导出失败:', err);
+          ElementPlus.ElMessage.error('导出失败');
+        }
+      }
+
+      /** 小火箭：点火发射动画 + 平滑回到顶部 */
+      function launchRocket() {
+        const btn = document.querySelector('.rocket-btn');
+        if (btn && !btn.classList.contains('launching')) {
+          btn.classList.add('launching');
+          setTimeout(() => btn.classList.remove('launching'), 1000);
+        }
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+      }
+
+      /**
+       * 选择导入文件：校验 JSON → 确认覆盖 → POST /api/import（服务端写盘并广播全量同步）
+       */
+      async function onImportFileSelect(event) {
+        const file = event.target.files && event.target.files[0];
+        event.target.value = '';
+        moreMenuVisible.value = false;
+        if (!file) return;
+        let text;
+        try {
+          text = await file.text();
+          JSON.parse(text); // 预解析校验
+        } catch (err) {
+          ElementPlus.ElMessage.error('文件不是有效的 JSON');
+          return;
+        }
+        try {
+          await ElementPlus.ElMessageBox.confirm('导入将覆盖当前全部数据（项目/任务/备注/状态），确定继续？', '导入数据', {
+            type: 'warning',
+            confirmButtonText: '覆盖导入',
+            cancelButtonText: '取消',
+          });
+        } catch (err) { return; } // 用户取消
+        try {
+          const resp = await fetch(apiUrl('/api/import'), {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: text,
+          });
+          const r = await resp.json();
+          if (r.success) {
+            if (r.missingImages > 0) {
+              ElementPlus.ElMessage.warning(`导入成功，但有 ${r.missingImages} 张图片未随数据导入（需手动复制服务端 uploads/ 目录）`);
+            } else {
+              ElementPlus.ElMessage.success('导入成功，数据已覆盖');
+            }
+          } else {
+            ElementPlus.ElMessage.error('导入失败: ' + (r.error || '未知错误'));
+          }
+        } catch (err) {
+          console.error('[Import] 导入失败:', err);
+          ElementPlus.ElMessage.error('导入失败，请检查网络');
+        }
+      }
+
+      /**
+       * 应用主题：注入 <style id="theme-style">（CSS 变量 + 结构性覆盖），立即生效并持久化选择
+       */
+      function applyTheme(id) {
+        const t = themes.find(x => x.id === id);
+        if (!t) return;
+        themeId.value = id;
+        try { localStorage.setItem(THEME_KEY, id); } catch (e) { /* 忽略 */ }
+        if (typeof window.buildThemeCss !== 'function') return;
+        let st = document.getElementById('theme-style');
+        if (!st) { st = document.createElement('style'); st.id = 'theme-style'; document.head.appendChild(st); }
+        st.textContent = window.buildThemeCss(t);
+      }
+      // setup 阶段立即应用已保存主题（早于首帧渲染，避免默认色闪烁）
+      applyTheme(themeId.value);
+
       // ==================== 响应式数据 ====================
 
       /** 所有任务列表 */
@@ -38,11 +178,11 @@
       /** 删除/落位确认高亮行 id（spotlight） */
       const confirmBugId = ref(null);
 
-      /** 正在"消亡"（删除过渡）的行 id */
+      /** 正在"消亡"（收起动画中）的行 id */
       const dyingBugId = ref(null);
 
-      /** 覆盖在下方的行 id（spotlight 浮层阴影） */
-      const coveringBugId = ref(null);
+      /** 正在"渐隐"（仅剩一行时淡出）的行 id */
+      const fadingBugId = ref(null);
 
       /** 刚插入、播放生长动画的行 id */
       const enteringBugId = ref(null);
@@ -206,6 +346,9 @@
       /** WebSocket 实例 */
       let ws = null;
 
+      /** 断线期间的待发消息队列（重连补发，上限 50 条） */
+      let pendingQueue = [];
+
       /** 重连定时器 */
       let reconnectTimer = null;
 
@@ -233,14 +376,42 @@
       /** 状态选项 */
       const statusOptions = ['待修复', '修复中', '已完成'];
 
-      /** 状态排序映射：修复中(0) → 待修复(1) → 已完成(2) */
-      const STATUS_ORDER = { '修复中': 0, '待修复': 1, '已完成': 2 };
+      /** 状态排序映射：待修复(0) → 修复中(1) → 已完成(2)，已完成永远在最下面 */
+      const STATUS_ORDER = { '待修复': 0, '修复中': 1, '已完成': 2 };
 
       /** 正在编辑名称的任务 ID */
       const editingBugId = ref(null);
 
       /** 状态筛选条件（默认"全部"即不筛选） */
       const statusFilter = ref('全部');
+
+      /** 任务名称搜索关键字（纯前端过滤） */
+      const searchText = ref('');
+
+      /** 组内排序方向：true=倒序（新来的在前），false=正序（新来的在后）；仅本机生效 */
+      const SORT_KEY = 'buglist_sort_desc';
+      const sortDesc = ref((function () {
+        try { return localStorage.getItem(SORT_KEY) === '1'; } catch (e) { return true; }
+      })()); // 默认倒序：新任务默认在第一行（用户偏好）
+
+      /**
+       * 切换排序方向（正序/倒序），切换时手动 FLIP 让所有行平滑滑到新位置
+       */
+      function toggleSort() {
+        sortDesc.value = !sortDesc.value;
+        try { localStorage.setItem(SORT_KEY, sortDesc.value ? '1' : '0'); } catch (e) { /* 忽略 */ }
+        const rows = Array.from(document.querySelectorAll('.bug-rows .bug-row'));
+        const oldRects = captureRects(rows);
+        nextTick(() => {
+          flipRowsWithRects(rows, oldRects); // 行滑到新的组内位置（无跳变）
+        });
+      }
+
+      /** 计数徽标闪烁的目标状态（行移动动画完成后触发） */
+      const flashStatus = ref(null);
+      let pendingFlashStatus = null;   // 最近一次状态变更的目标（供 watch 消费一次）
+      let pendingFlashTimer = null;
+      let countFlashTimer = null;
 
       /** 服务器地址（优先读 localStorage，fallback 当前 host） */
       const serverHost = ref(
@@ -290,6 +461,12 @@
 
       /** 当前预览的图片索引 */
       const previewIndex = ref(0);
+
+      /** 当前预览的图片归属 bug（牌堆预览才有；备注图预览为 null → 查看器不显示删除钮） */
+      const previewBug = ref(null);
+
+      /** 查看器内删除确认框可见性 */
+      const previewDeleteVisible = ref(false);
 
       /** 正在上传中的任务 ID（用于 loading 遮罩） */
       const uploadingBugId = ref(null);
@@ -370,8 +547,18 @@
         if (statusFilter.value !== '全部') {
           list = list.filter(b => b.status === statusFilter.value);
         }
-        // 排序：修复中(0) → 待修复(1) → 已完成(2)，同状态保持原序（稳定排序）
-        return [...list].sort((a, b) => (STATUS_ORDER[a.status] ?? 9) - (STATUS_ORDER[b.status] ?? 9));
+        // 搜索：任务名称包含关键字（不区分大小写）
+        const kw = searchText.value.trim().toLowerCase();
+        if (kw) {
+          list = list.filter(b => (b.name || '').toLowerCase().includes(kw));
+        }
+        // 排序：待修复(0) → 修复中(1) → 已完成(2)；组内按 statusChangedAt（倒序=新的在前/正序=旧的在前），稳定排序
+        return [...list].sort((a, b) => {
+          const g = (STATUS_ORDER[a.status] ?? 9) - (STATUS_ORDER[b.status] ?? 9);
+          if (g !== 0) return g;
+          const ta = a.statusChangedAt || 0, tb = b.statusChangedAt || 0;
+          return sortDesc.value ? tb - ta : ta - tb;
+        });
       });
 
       /** 备注弹窗对应的任务 */
@@ -417,7 +604,14 @@
           disconnectReason.value = null;
           allowReconnect = true;
           reconnectAttempts = 0;
-          // 服务端会自动发送 fullSync，但也可以主动请求
+          // 先补发离线期间的暂存消息（服务端依次处理），再请求全量同步拿最新状态
+          if (pendingQueue.length) {
+            const n = pendingQueue.length;
+            console.log(`[WS] 补发 ${n} 条离线消息`);
+            pendingQueue.forEach(m => ws.send(JSON.stringify(m)));
+            pendingQueue = [];
+            ElementPlus.ElMessage.info(`离线期间的 ${n} 条修改已同步`);
+          }
           sendMessage({ type: 'requestSync', clientId });
         };
 
@@ -477,12 +671,19 @@
 
       /**
        * 发送 WebSocket 消息
+       * 连接未就绪时暂存到待发队列（上限 50 条），重连成功后补发；
+       * 手动切换服务器时（disconnect）清空队列，避免消息发到错误的目标。
        */
       function sendMessage(msg) {
         if (ws && ws.readyState === WebSocket.OPEN) {
           ws.send(JSON.stringify(msg));
         } else {
-          console.warn('[WS] 无法发送消息，连接未就绪');
+          if (pendingQueue.length < 50) {
+            pendingQueue.push(msg);
+            console.warn('[WS] 连接未就绪，消息已暂存待补发:', msg.type);
+          } else {
+            console.warn('[WS] 待发队列已满（50 条），丢弃消息:', msg.type);
+          }
         }
       }
 
@@ -618,7 +819,7 @@
 
         if (!msg.change) return;
 
-        const { type, taskId, bugId, field, value, completedAt } = msg.change;
+        const { type, taskId, bugId, field, value, completedAt, statusChangedAt } = msg.change;
         console.log(`[WS] 收到广播: type=${type}, taskId=${taskId?.substring(0,8)}, bugId=${bugId}, field=${field}, value=${value}, completedAt=${completedAt}, 来源=${(msg.originClientId || '?').substring(0,8)}`);
 
         switch (type) {
@@ -626,7 +827,7 @@
             handleRemoteAdd(msg);
             break;
           case 'update':
-            handleRemoteUpdate(taskId, bugId, field, value, completedAt);
+            handleRemoteUpdate(taskId, bugId, field, value, completedAt, statusChangedAt);
             break;
           case 'delete':
             handleRemoteDelete(taskId, bugId);
@@ -689,7 +890,7 @@
       /**
        * 处理远程更新
        */
-      function handleRemoteUpdate(taskId, bugId, field, value, completedAt) {
+      function handleRemoteUpdate(taskId, bugId, field, value, completedAt, statusChangedAt) {
         const task = tasks.value.find(t => t.id === taskId);
         if (!task) {
           console.log(`[WS] handleRemoteUpdate: taskId=${taskId?.substring(0,8)} 未找到，请求全量同步`);
@@ -704,7 +905,7 @@
         }
 
         // 第三层防护：新旧值相同时跳过
-        if (bug[field] === value && completedAt === undefined) {
+        if (bug[field] === value && completedAt === undefined && statusChangedAt === undefined) {
           console.log(`[WS] handleRemoteUpdate: bugId=${bugId} ${field} 值相同，跳过 (${value})`);
           return;
         }
@@ -719,6 +920,10 @@
           } else {
             bug.completedAt = completedAt;
           }
+        }
+        // 同步 statusChangedAt（组内排序依据：新来的往组末尾）
+        if (statusChangedAt !== undefined) {
+          bug.statusChangedAt = statusChangedAt;
         }
       }
 
@@ -902,6 +1107,7 @@
           reconnectTimer = null;
         }
         reconnectAttempts = 0;
+        pendingQueue = []; // 手动切换服务器：清空待发队列，避免消息发到错误目标
         if (ws) {
           ws.onclose = null;
           ws.close();
@@ -956,11 +1162,218 @@
         return statusFilter.value === filter ? 'filter-active' : '';
       }
 
+      /** 捕获当前列表中所有行的位置（FLIP 用） */
+      function captureRects(rows) {
+        const m = new Map();
+        rows.forEach(r => m.set(r.dataset.bugId, r.getBoundingClientRect()));
+        return m;
+      }
+
       /**
-       * 状态变更
+       * 手动 FLIP：让行从旧位置滑到新位置，不依赖 Vue 过渡系统。
+       * 匀速策略（"下楼"模型）：每层恒定 ROW_MS ms；一屏约 VISIBLE_LEVELS 行——
+       * 移动 ≤ 一屏时全程匀速；移动 > 一屏时，可视部分匀速跑完（≈2.5s），
+       * 出屏后的剩余距离在结束时瞬间到位（没人看得见，不影响观感）。
+       * 钉回旧位置后强制回流提交中间状态（双 rAF 可能同帧执行导致无过渡=瞬移）。
+       * @param {Element[]} rows 参与动画的行
+       * @param {Map} oldRects 变更前捕获的位置
+       */
+      function flipRowsWithRects(rows, oldRects) {
+        if (!rows || !rows.length) return;
+        const ROW_MS = 60, MIN_MS = 200, VISIBLE_LEVELS = 10; // 可视匀速段 10 层 ≈ 0.6s，之后弹射到位
+        const VH = window.innerHeight; // 视口高度：屏幕外行程瞬移，视口内行程匀速
+        requestAnimationFrame(() => {
+          // 量行高（用于"层数"换算）
+          let totalH = 0, n = 0;
+          rows.forEach(r => {
+            if (!r.isConnected) return;
+            const o = oldRects.get(r.dataset.bugId);
+            if (!o) return;
+            totalH += r.getBoundingClientRect().height;
+            n++;
+          });
+          if (!n) return;
+          const rowH = totalH / n + 7; // +7 = .bug-rows 的 gap
+          const moves = [];
+          rows.forEach(r => {
+            if (!r.isConnected) return;
+            const o = oldRects.get(r.dataset.bugId);
+            if (!o) return;
+            const nr = r.getBoundingClientRect();
+            const dx = o.left - nr.left, dy = o.top - nr.top;
+            if (!dx && !dy) return;
+            const oldTop = o.top, newTop = nr.top;
+            // 可视行程：行 top 在视口内的移动区间。
+            // 向上移：视口底缘 → 终点（起点在屏幕外的部分先瞬移）
+            // 向下移：起点 → 视口底缘（终点在屏幕外的部分后瞬移）
+            let v0, v1;
+            if (dy < 0) { v0 = Math.min(VH, oldTop); v1 = Math.max(0, newTop); }
+            else { v0 = Math.max(0, oldTop); v1 = Math.min(VH, newTop); }
+            // 匀速段封顶 3 层（≈1s），之后弹射到位——不拖时间
+            const visTravel = Math.min(Math.abs(v1 - v0), VISIBLE_LEVELS * rowH);
+            const animEnd = v0 + Math.sign(v1 - v0) * visTravel;
+            const levels = Math.max(1, Math.round(visTravel / rowH));
+            moves.push({ el: r, dx, dy, newTop, v0, animEnd, dur: Math.max(MIN_MS, levels * ROW_MS) });
+          });
+          if (!moves.length) return;
+          // 找出位移最大的"主角"行（长距离移动的那一行）
+          let mover = moves[0];
+          moves.forEach(m => { if (Math.abs(m.dy) > Math.abs(mover.dy)) mover = m; });
+          // 钉回旧位置 + 强制回流（提交中间状态，过渡才有起点）
+          // 层级提升：只有"主角"给高 z-index（999），其余让位行保持普通层级——
+          // 若所有行都给相同 z-index，它们之间仍按 DOM 顺序绘制，主角会被同组靠后的行盖住。
+          moves.forEach(m => {
+            m.el.style.transition = 'none';
+            m.el.style.transform = 'translate(' + m.dx + 'px,' + m.dy + 'px)';
+            if (m === mover) {
+              m.el.style.position = 'relative';
+              m.el.style.zIndex = '999';
+              m.el.style.boxShadow = 'var(--shadow-hover)';
+            }
+          });
+          void document.body.offsetHeight;
+          // rAF 逐帧驱动：屏幕外行程瞬移，视口内行程匀速（恒定步速）
+          const start = performance.now();
+          function tick(now) {
+            const t = now - start;
+            let pending = false;
+            moves.forEach(m => {
+              if (!m.el.isConnected) return;
+              const p = Math.min(1, t / m.dur);
+              // 行的 top：结束帧弹射到位；中间在匀速段 [v0, animEnd] 匀速
+              const top = p >= 1 ? m.newTop : m.v0 + (m.animEnd - m.v0) * p;
+              const tx = m.dx * p;
+              const ty = top - m.newTop;
+              m.el.style.transform = 'translate(' + tx + 'px,' + ty + 'px)';
+              if (p < 1) pending = true;
+            });
+            if (pending) {
+              requestAnimationFrame(tick);
+            } else {
+              moves.forEach(m => {
+                if (m.el.isConnected) {
+                  m.el.style.transform = '';
+                  m.el.style.transition = '';
+                  m.el.style.position = '';
+                  m.el.style.zIndex = '';
+                  m.el.style.boxShadow = '';
+                }
+              });
+            }
+          }
+          requestAnimationFrame(tick);
+        });
+      }
+
+      /**
+       * 筛选视图：行"被吸收"飞出——瞄准筛选栏对应状态 tag，目标点略靠下 30px + 缩小 + 淡出 + 高度收起，1s。
+       * 1s 后再真正改状态（行被滤除时已透明缩小，移除不可感知）
+       */
+      function flyRowToTag(bug, rowEl, newStatus) {
+        const r = rowEl.getBoundingClientRect();
+        // 目标 = 目标状态 tag 按钮（按钮顺序：全部, 待修复, 修复中, 已完成 → 按序号取，不依赖属性）
+        let dx = 0, dy = 0;
+        const bar = document.querySelector('.filter-buttons');
+        if (bar) {
+          const btns = Array.from(bar.querySelectorAll('.el-button'));
+          const idx = statusOptions.indexOf(newStatus); // 0=待修复 1=修复中 2=已完成
+          const btn = btns[idx + 1];
+          let bx, by;
+          if (btn) {
+            const b = btn.getBoundingClientRect();
+            bx = b.left + b.width / 2;
+            by = b.top + b.height / 2;
+          } else {
+            // 兜底：按序号在筛选栏内均匀分布（仍分三档横向位置）
+            const br = bar.getBoundingClientRect();
+            bx = br.left + (idx + 1) / (statusOptions.length + 1) * br.width;
+            by = br.top + br.height / 2;
+          }
+          dx = bx - (r.left + r.width / 2);
+          dy = by - (r.top + r.height / 2);
+        } else {
+          dy = -r.height - 20; // 没有筛选栏时向上飞出
+        }
+        dy += 30; // 目标点略靠下 30px（不必正中 tag，观感更自然）
+        // 飞行：行留在文档流内，高度同步收起（槽位平滑闭合，下方行自然上移补位，无需 FLIP）
+        // 视觉 = 行瞄准筛选栏下 30px + 缩小 + 淡出 + 槽位收拢，"被吸收"过程连贯无空洞
+        const h = rowEl.offsetHeight;
+        rowEl.style.height = h + 'px';           // 钉住初始高度（auto→0 无法过渡）
+        rowEl.style.minHeight = '0px';
+        rowEl.style.paddingTop = '0px';
+        rowEl.style.paddingBottom = '0px';
+        rowEl.style.borderTopWidth = '0px';
+        rowEl.style.borderBottomWidth = '0px';
+        rowEl.style.marginBottom = '-7px';       // 抵消 .bug-rows 的 gap，收起不留缝
+        rowEl.style.overflow = 'hidden';
+        rowEl.style.pointerEvents = 'none';
+        rowEl.style.position = 'relative';
+        rowEl.style.zIndex = '999'; // 飞行中浮到所有行之上（避免被下方补位行盖住）
+        rowEl.style.boxShadow = 'var(--shadow-hover)';
+        rowEl.style.transition = 'transform 1s cubic-bezier(.3,1.2,.4,1), opacity 1s ease, height 1s cubic-bezier(.3,1.2,.4,1), padding-top 1s ease, padding-bottom 1s ease, border-top-width 1s ease, border-bottom-width 1s ease';
+        void rowEl.offsetHeight;                 // 强制回流：提交"初始高度 + 原位"状态
+        rowEl.style.transformOrigin = '50% 50%';
+        rowEl.style.transform = 'translate(' + dx + 'px,' + dy + 'px) scale(.15)';
+        rowEl.style.opacity = '0';
+        rowEl.style.height = '0px';
+        // 1s 后：改状态（行被滤除，此时已透明且高度为 0，移除不可感知）→ 计数闪烁
+        setTimeout(() => {
+          pendingFlashStatus = newStatus;
+          clearTimeout(pendingFlashTimer);
+          pendingFlashTimer = setTimeout(() => { pendingFlashStatus = null; }, 800);
+          bug.status = newStatus;
+          bug.statusChangedAt = Date.now(); // 新来的往组末尾
+          if (newStatus === '已完成') {
+            bug.completedAt = formatTimestamp(new Date());
+          } else if (bug.completedAt !== undefined) {
+            delete bug.completedAt;
+          }
+          sendUpdate(bug.id, 'status', newStatus);
+          if (rowEl.isConnected) {
+            rowEl.style.height = '';
+            rowEl.style.minHeight = '';
+            rowEl.style.paddingTop = '';
+            rowEl.style.paddingBottom = '';
+            rowEl.style.borderTopWidth = '';
+            rowEl.style.borderBottomWidth = '';
+            rowEl.style.marginBottom = '';
+            rowEl.style.overflow = '';
+            rowEl.style.pointerEvents = '';
+            rowEl.style.position = '';
+            rowEl.style.zIndex = '';
+            rowEl.style.boxShadow = '';
+            rowEl.style.transition = '';
+            rowEl.style.transformOrigin = '';
+            rowEl.style.transform = '';
+            rowEl.style.opacity = '';
+          }
+        }, 1000);
+      }
+
+      /**
+       * 状态变更：
+       * - 全部视图：立即改状态 + 手动 FLIP（行与其余行一起弹性滑到新位置，1s）
+       * - 筛选视图：行飞向目标状态 tag 被吸收（平移+缩小+淡出，1s），完成后才改状态
+       * - 计数闪烁：飞行/移动完成后，目标筛选徽标闪一下（"系统已收到操作"反馈）
        */
       function onStatusChange(bug, newStatus) {
+        if (bug.status === newStatus) return;
+
+        // 筛选视图：飞向目标 tag
+        const rowEl = document.querySelector('.bug-row[data-bug-id="' + bug.id + '"]');
+        if (statusFilter.value !== '全部' && rowEl) {
+          flyRowToTag(bug, rowEl, newStatus);
+          return;
+        }
+
+        // 全部视图：手动 FLIP
+        const rows = Array.from(document.querySelectorAll('.bug-rows .bug-row'));
+        const oldRects = captureRects(rows);
+        pendingFlashStatus = newStatus;
+        clearTimeout(pendingFlashTimer);
+        pendingFlashTimer = setTimeout(() => { pendingFlashStatus = null; }, 800);
         bug.status = newStatus;
+        bug.statusChangedAt = Date.now(); // 新来的往组末尾
         // 自动管理完成时间锚点
         if (newStatus === '已完成') {
           bug.completedAt = formatTimestamp(new Date());
@@ -968,7 +1381,21 @@
           delete bug.completedAt;
         }
         sendUpdate(bug.id, 'status', newStatus);
+        flipRowsWithRects(rows, oldRects);
       }
+
+      // 状态计数变化 → 行飞出动画完成后闪烁对应筛选徽标（仅筛选视图；全部视图有移动动画，不闪）
+      watch(statusCounts, () => {
+        if (!pendingFlashStatus) return;
+        if (statusFilter.value === '全部') { pendingFlashStatus = null; return; }
+        const target = pendingFlashStatus;
+        pendingFlashStatus = null;
+        clearTimeout(countFlashTimer);
+        countFlashTimer = setTimeout(() => {
+          flashStatus.value = target;
+          setTimeout(() => { if (flashStatus.value === target) flashStatus.value = null; }, 700);
+        }, 100); // 行飞出（1s）在超时内完成后才真正改状态，闪烁紧随其后
+      });
 
       /**
        * 开始编辑名称
@@ -1010,7 +1437,7 @@
       function addBug() {
         const task = currentTask.value;
         if (!task) {
-          ElementPlus.ElMessage.warning('请先创建任务');
+          ElementPlus.ElMessage.warning('请先创建项目');
           return;
         }
 
@@ -1019,6 +1446,7 @@
           name: '',
           status: '待修复',
           images: [],
+          statusChangedAt: Date.now(), // 组内排序依据：新来的往组末尾
         };
 
         task.bugs.push(newBug);
@@ -1030,8 +1458,8 @@
         enteringBugId.value = newBug.id;
         setTimeout(() => { enteringBugId.value = null; }, 320);
 
-        // 新增按钮"垒上"动画（land 仅由 JS 控制；限定工具栏按钮，避免误中标签栏"＋"）
-        const addBtn = document.querySelector('.toolbar-actions .btn-add');
+        // 新增任务按钮"垒上"动画（land 仅由 JS 控制；限定卡片列表头按钮，避免误中标签栏"新增项目"）
+        const addBtn = document.querySelector('.bug-panel .btn-add-task');
         if (addBtn) {
           addBtn.classList.add('land');
           setTimeout(() => addBtn.classList.remove('land'), 360);
@@ -1130,46 +1558,68 @@
        */
       function cancelDeleteConfirm() { confirmBugId.value = null; }
 
-      /**
-       * 被删行的下一行 id（该行获得"盖子投影"）
-       */
-      function nextBugIdOf(bug) {
-        const list = filteredAndSortedBugs.value;
-        const i = list.findIndex(b => b.id === bug.id);
-        return i !== -1 && list[i + 1] ? list[i + 1].id : null;
-      }
-
       /** 按 data-bug-id 找到对应行元素 */
       function rowElementOf(id) { return document.querySelector('.bug-row[data-bug-id="' + id + '"]'); }
 
       /**
-       * 确认删除：幕布渐亮 → 红光一闪 + 高度坍塌 → 340ms 后真正移除并同步
+       * 确认删除：
+       * - 多行：先钉死行高（height 无法从 auto 过渡），再切 dying 类 → 行高/内边距/边框
+       *   同步收起，下方行在正常文档流中随之平滑上移覆盖，transitionend 后才移除，零跳变；
+       * - 仅剩一行：切 fade 类直接渐隐。
+       * 去掉固定 340ms 定时器 + 行内 height:0 的旧方案（过渡易被打断导致"收到一半瞬移"）。
        */
       function confirmDeleteBug(bug) {
-        if (dyingBugId.value) return; // 重入守卫：已有删除动画进行中
+        if (dyingBugId.value || fadingBugId.value) return; // 重入守卫：已有删除动画进行中
         const task = currentTask.value;
         if (!task) return;
-        confirmBugId.value = null;        // 幕布渐亮
-        dyingBugId.value = bug.id;        // 红光一闪 + 高度坍塌
-        coveringBugId.value = nextBugIdOf(bug); // 下面一行获得盖子投影
-        const rowEl = rowElementOf(bug.id);
-        const h = rowEl ? rowEl.offsetHeight : 44;
-        if (rowEl) {
-          rowEl.style.minHeight = '0px';  // 红线①：min-height:44px 会顶住坍塌，先归零
-          rowEl.style.height = h + 'px';  // 红线①：必须先钉死像素（auto→0 无法过渡）
-          rowEl.getBoundingClientRect();
-          rowEl.style.height = '0px';
+        confirmBugId.value = null; // 幕布淡出
+
+        // 仅剩一行（含筛选后可见仅一行）：渐隐淡出
+        if (filteredAndSortedBugs.value.length <= 1) {
+          fadingBugId.value = bug.id;
+          finalizeDeleteAfter(bug, { prop: 'opacity', fallbackMs: 260 });
+          return;
         }
-        setTimeout(() => {
-          if (dyingBugId.value === bug.id) { // 身份守卫：仍在本行的消亡中才真正删除
-            const task2 = currentTask.value;
-            const idx = (task2 && task2.bugs) ? task2.bugs.findIndex(b => b.id === bug.id) : -1;
-            if (idx !== -1) task2.bugs.splice(idx, 1);
-            sendDelete(bug.id);
-            dyingBugId.value = null;
-            coveringBugId.value = null;
-          }
-        }, 340); // 文字被完全压住后才真正删除
+
+        // 多行：钉死行高后切 dying 类触发收起（min-height:44px 会顶住坍塌，一并归零）
+        const rowEl = rowElementOf(bug.id);
+        if (rowEl) {
+          const h = rowEl.offsetHeight;
+          rowEl.style.height = h + 'px';
+          rowEl.style.minHeight = '0px';
+          rowEl.getBoundingClientRect(); // 强制回流，确保过渡从 h 起步
+        }
+        dyingBugId.value = bug.id;
+        finalizeDeleteAfter(bug, { prop: 'height', fallbackMs: 340 });
+      }
+
+      /**
+       * 监听删除动画结束（transitionend 只认目标属性），结束后移除行并同步；
+       * fallbackMs 兜底：浏览器未触发 transitionend（prefers-reduced-motion / 异常中断）时强制完成。
+       * finish 有 done 守卫，双路径只会执行一次。
+       */
+      function finalizeDeleteAfter(bug, { prop, fallbackMs }) {
+        let done = false;
+        const finish = () => {
+          if (done) return;
+          done = true;
+          const rowEl = rowElementOf(bug.id);
+          if (rowEl) rowEl.removeEventListener('transitionend', onEnd);
+          const task2 = currentTask.value;
+          const idx = (task2 && task2.bugs) ? task2.bugs.findIndex(b => b.id === bug.id) : -1;
+          if (idx !== -1) task2.bugs.splice(idx, 1);
+          sendDelete(bug.id);
+          dyingBugId.value = null;
+          fadingBugId.value = null;
+        };
+        const onEnd = (e) => {
+          // 只认目标行自身的属性过渡完成（子元素/其他属性的 transitionend 忽略）
+          if (e.target !== rowElementOf(bug.id) || e.propertyName !== prop) return;
+          finish();
+        };
+        const rowEl = rowElementOf(bug.id);
+        if (rowEl) rowEl.addEventListener('transitionend', onEnd);
+        setTimeout(finish, fallbackMs);
       }
 
       // ==================== 任务操作 ====================
@@ -1179,12 +1629,12 @@
       const editingTaskName = ref('');
 
       /**
-       * 新建任务
+       * 新建项目（标签栏顶部层级，含条目列表）
        */
       function createTask() {
         const task = {
           id: randomUUID(),
-          name: '新任务',
+          name: '新项目',
           bugs: [],
         };
         tasks.value.push(task);
@@ -1237,6 +1687,10 @@
         const newName = editingTaskName.value.trim();
         editingTaskId.value = null;
         if (!newName || newName === task.name) return;
+        const dup = tasks.value.some(t => t.id !== task.id && t.name === newName);
+        if (dup) {
+          ElementPlus.ElMessage.warning('已存在同名项目「' + newName + '」，仍将重命名');
+        }
         task.name = newName;
         sendMessage({ type: 'updateTask', clientId, data: { taskId: task.id, field: 'name', value: newName } });
       }
@@ -1250,11 +1704,11 @@
       }
 
       /**
-       * 删除任务
+       * 删除项目（至少保留一个；删项目连带清理其下所有任务的图片）
        */
       function deleteTask(taskId) {
         if (tasks.value.length <= 1) {
-          ElementPlus.ElMessage.warning('至少保留一个任务');
+          ElementPlus.ElMessage.warning('至少保留一个项目');
           return;
         }
         const task = tasks.value.find(t => t.id === taskId);
@@ -1295,13 +1749,34 @@
         notesDialogVisible.value = true;
       }
 
+      /** 任务备注 - 正在编辑的备注 id（null=查看模式） */
+      const editingTaskNoteId = ref(null);
+      let editTaskNoteBackup = '';
+
+      /** 进入编辑：备份内容（取消可还原） */
+      function startEditTaskNote(note) {
+        if (note.clientId !== clientId) return;
+        editTaskNoteBackup = note.content;
+        editingTaskNoteId.value = note.id;
+      }
+      /** 确认编辑：保存并退出编辑态 */
+      function confirmEditTaskNote(note) {
+        editingTaskNoteId.value = null;
+        updateNote(note.id, note.content);
+      }
+      /** 取消编辑：还原内容并退出编辑态 */
+      function cancelEditTaskNote(note) {
+        note.content = editTaskNoteBackup;
+        editingTaskNoteId.value = null;
+      }
+
       /**
        * 任务备注 - 编辑键盘事件（Enter 确认，Shift+Enter 换行）
        */
       function onTaskNoteEditKeydown(e, note) {
         if (e.key === 'Enter' && !e.shiftKey) {
           e.preventDefault();
-          updateNote(note.id, note.content);
+          confirmEditTaskNote(note);
         }
       }
 
@@ -1330,6 +1805,7 @@
           id: noteId || randomUUID(),
           clientId: clientId,
           content: content.trim(),
+          createdAt: Date.now(), // 创建时间锚点（判断"已修改"）
           updatedAt: Date.now(),
           authorName: displayName.value.trim() || null,
           ...(images && images.length ? { images } : {}),
@@ -1350,9 +1826,9 @@
         let noteId = null;
         const files = pendingNoteFiles.value;
         if (files && files.length) {
-          // 上限防御：单条备注最多 20 张图片（新备注 note.images 尚为空，按待传数量判定；>20 仅拦截超限，恰好 20 张放行）
-          if (files.length > 20) {
-            ElementPlus.ElMessage.warning('单条备注最多 20 张图片');
+          // 上限防御：单条备注最多 6 张图片（新备注 note.images 尚为空，按待传数量判定；>6 仅拦截超限，恰好 6 张放行）
+          if (files.length > 6) {
+            ElementPlus.ElMessage.warning('单条备注最多 6 张图片');
             return;
           }
           noteId = randomUUID();
@@ -1409,10 +1885,10 @@
           return;
         }
         if (attachTargetNote.value) {
-          // 已有备注：批量预判"已有数 + 本次选择数 > 20"整批拦截（attachNoteImage 内单张守卫保留作纵深）
+          // 已有备注：批量预判"已有数 + 本次选择数 > 6"整批拦截（attachNoteImage 内单张守卫保留作纵深）
           const note = attachTargetNote.value;
-          if ((note.images || []).length + files.length > 20) {
-            ElementPlus.ElMessage.warning('单条备注最多 20 张图片');
+          if ((note.images || []).length + files.length > 6) {
+            ElementPlus.ElMessage.warning('单条备注最多 6 张图片');
             event.target.value = '';
             attachTargetNote.value = null;   // 与成功路径对称复位，避免拦截后误附加到旧备注
             return;
@@ -1421,9 +1897,9 @@
           files.forEach(f => attachNoteImage(note, f));
           attachTargetNote.value = null;
         } else {
-          // 新备注待提交模式：批量预判"待传数 + 本次选择数 > 20"拦截（未超限才 push）
-          if (pendingNoteFiles.value.length + files.length > 20) {
-            ElementPlus.ElMessage.warning('单条备注最多 20 张图片');
+          // 新备注待提交模式：批量预判"待传数 + 本次选择数 > 6"拦截（未超限才 push）
+          if (pendingNoteFiles.value.length + files.length > 6) {
+            ElementPlus.ElMessage.warning('单条备注最多 6 张图片');
             event.target.value = '';
             return;
           }
@@ -1463,9 +1939,9 @@
        */
       async function attachNoteImage(note, file) {
         if (!note || note.clientId !== clientId || !file) return;
-        // 上限防御：单条备注最多 20 张图片
-        if ((note.images || []).length >= 20) {
-          ElementPlus.ElMessage.warning('单条备注最多 20 张图片');
+        // 上限防御：单条备注最多 6 张图片
+        if ((note.images || []).length >= 6) {
+          ElementPlus.ElMessage.warning('单条备注最多 6 张图片');
           return;
         }
         const taskId = notesDialogTaskId.value;
@@ -1513,7 +1989,7 @@
       }
 
       /**
-       * 删除备注
+       * 删除备注（二次确认；删除后不可恢复）
        */
       function deleteNote(noteId) {
         const task = notesDialogTask.value;
@@ -1521,10 +1997,22 @@
         const note = task.notes.find(n => n.id === noteId);
         // 归属防御：仅作者本人可删除（与服务端校验保持一致）
         if (!note || note.clientId !== clientId) return;
-        const index = task.notes.findIndex(n => n.id === noteId);
-        if (index === -1) return;
-        task.notes.splice(index, 1);
-        sendMessage({ type: 'deleteNote', clientId, data: { taskId: task.id, noteId } });
+        ElementPlus.ElMessageBox.confirm('确定删除这条备注？删除后不可恢复。', '删除备注', {
+          type: 'warning',
+          confirmButtonText: '删除',
+          cancelButtonText: '取消',
+        }).then(() => {
+          const idx = task.notes.findIndex(n => n.id === noteId);
+          if (idx === -1) return;
+          task.notes.splice(idx, 1);
+          if (editingTaskNoteId.value === noteId) editingTaskNoteId.value = null;
+          sendMessage({ type: 'deleteNote', clientId, data: { taskId: task.id, noteId } });
+        }).catch(() => { /* 用户取消 */ });
+      }
+
+      /** 备注是否被修改过（updatedAt > createdAt，即飞书式的"已修改"标记） */
+      function isNoteModified(note) {
+        return !!(note && note.createdAt && note.updatedAt && note.updatedAt > note.createdAt + 1000);
       }
 
       /** 备注作者颜色调色板 */
@@ -1583,6 +2071,7 @@
           id: noteId || randomUUID(),
           clientId: clientId,
           content: content.trim(),
+          createdAt: Date.now(), // 创建时间锚点（判断"已修改"）
           updatedAt: Date.now(),
           authorName: displayName.value.trim() || null,
           ...(images && images.length ? { images } : {}),
@@ -1603,9 +2092,9 @@
         let noteId = null;
         const files = pendingBugNoteFiles.value;
         if (files && files.length) {
-          // 上限防御：单条备注最多 20 张图片（新备注 note.images 尚为空，按待传数量判定；>20 仅拦截超限，恰好 20 张放行）
-          if (files.length > 20) {
-            ElementPlus.ElMessage.warning('单条备注最多 20 张图片');
+          // 上限防御：单条备注最多 6 张图片（新备注 note.images 尚为空，按待传数量判定；>6 仅拦截超限，恰好 6 张放行）
+          if (files.length > 6) {
+            ElementPlus.ElMessage.warning('单条备注最多 6 张图片');
             return;
           }
           noteId = randomUUID();
@@ -1662,10 +2151,10 @@
           return;
         }
         if (attachTargetBugNote.value) {
-          // 已有备注：批量预判"已有数 + 本次选择数 > 20"整批拦截（attachBugNoteImage 内单张守卫保留作纵深）
+          // 已有备注：批量预判"已有数 + 本次选择数 > 6"整批拦截（attachBugNoteImage 内单张守卫保留作纵深）
           const note = attachTargetBugNote.value;
-          if ((note.images || []).length + files.length > 20) {
-            ElementPlus.ElMessage.warning('单条备注最多 20 张图片');
+          if ((note.images || []).length + files.length > 6) {
+            ElementPlus.ElMessage.warning('单条备注最多 6 张图片');
             event.target.value = '';
             attachTargetBugNote.value = null;   // 与成功路径对称复位，避免拦截后误附加到旧备注
             return;
@@ -1674,9 +2163,9 @@
           files.forEach(f => attachBugNoteImage(note, f));
           attachTargetBugNote.value = null;
         } else {
-          // 新备注待提交模式：批量预判"待传数 + 本次选择数 > 20"拦截（未超限才 push）
-          if (pendingBugNoteFiles.value.length + files.length > 20) {
-            ElementPlus.ElMessage.warning('单条备注最多 20 张图片');
+          // 新备注待提交模式：批量预判"待传数 + 本次选择数 > 6"拦截（未超限才 push）
+          if (pendingBugNoteFiles.value.length + files.length > 6) {
+            ElementPlus.ElMessage.warning('单条备注最多 6 张图片');
             event.target.value = '';
             return;
           }
@@ -1718,9 +2207,9 @@
         if (!note || note.clientId !== clientId || !file) return;
         const bug = bugNotesTargetBug.value;
         if (!bug) return;
-        // 上限防御：单条备注最多 20 张图片
-        if ((note.images || []).length >= 20) {
-          ElementPlus.ElMessage.warning('单条备注最多 20 张图片');
+        // 上限防御：单条备注最多 6 张图片
+        if ((note.images || []).length >= 6) {
+          ElementPlus.ElMessage.warning('单条备注最多 6 张图片');
           return;
         }
         const taskId = bugNotesTaskId.value;
@@ -1771,16 +2260,44 @@
         const note = bug.notes.find(n => n.id === noteId);
         // 归属防御：仅作者本人可删除（与服务端校验保持一致）
         if (!note || note.clientId !== clientId) return;
-        const index = bug.notes.findIndex(n => n.id === noteId);
-        if (index === -1) return;
-        bug.notes.splice(index, 1);
-        sendMessage({ type: 'deleteBugNote', clientId, data: { taskId: bugNotesTaskId.value, bugId: bug.id, noteId } });
+        ElementPlus.ElMessageBox.confirm('确定删除这条备注？删除后不可恢复。', '删除备注', {
+          type: 'warning',
+          confirmButtonText: '删除',
+          cancelButtonText: '取消',
+        }).then(() => {
+          const idx = bug.notes.findIndex(n => n.id === noteId);
+          if (idx === -1) return;
+          bug.notes.splice(idx, 1);
+          if (editingBugNoteId.value === noteId) editingBugNoteId.value = null;
+          sendMessage({ type: 'deleteBugNote', clientId, data: { taskId: bugNotesTaskId.value, bugId: bug.id, noteId } });
+        }).catch(() => { /* 用户取消 */ });
+      }
+
+      /** 条目备注 - 正在编辑的备注 id（null=查看模式） */
+      const editingBugNoteId = ref(null);
+      let editBugNoteBackup = '';
+
+      /** 进入编辑：备份内容（取消可还原） */
+      function startEditBugNote(note) {
+        if (note.clientId !== clientId) return;
+        editBugNoteBackup = note.content;
+        editingBugNoteId.value = note.id;
+      }
+      /** 确认编辑：保存并退出编辑态 */
+      function confirmEditBugNote(note) {
+        editingBugNoteId.value = null;
+        updateBugNote(note.id, note.content);
+      }
+      /** 取消编辑：还原内容并退出编辑态 */
+      function cancelEditBugNote(note) {
+        note.content = editBugNoteBackup;
+        editingBugNoteId.value = null;
       }
 
       function onBugNoteEditKeydown(e, note) {
         if (e.key === 'Enter' && !e.shiftKey) {
           e.preventDefault();
-          updateBugNote(note.id, note.content);
+          confirmEditBugNote(note);
         }
       }
 
@@ -1920,9 +2437,9 @@
         const bug = task?.bugs?.find((b) => b.id === bugId);
         if (!bug) return;
 
-        // 上限防御：单条任务（bug）最多 20 张截图，防止无上限堆积
-        if ((bug.images || []).length >= 20) {
-          ElementPlus.ElMessage.warning('单条任务最多 20 张截图');
+        // 上限防御：单条任务（bug）最多 6 张截图，防止无上限堆积
+        if ((bug.images || []).length >= 6) {
+          ElementPlus.ElMessage.warning('单条任务最多 6 张截图');
           return;
         }
 
@@ -2078,10 +2595,10 @@
         if (!files || !files.length) return;
         const bugId = currentImageBugId.value;
         if (bugId) {
-          // 批量预判："已有数 + 本次选择数 > 20" 整批拦截（handleImageUpload 内单张守卫保留作纵深）
+          // 批量预判："已有数 + 本次选择数 > 6" 整批拦截（handleImageUpload 内单张守卫保留作纵深）
           const bug = currentTask.value?.bugs?.find((b) => b.id === bugId);
-          if (bug && (bug.images || []).length + files.length > 20) {
-            ElementPlus.ElMessage.warning('单条任务最多 20 张截图');
+          if (bug && (bug.images || []).length + files.length > 6) {
+            ElementPlus.ElMessage.warning('单条任务最多 6 张截图');
             event.target.value = '';
             return;
           }
@@ -2170,26 +2687,24 @@
       let pvOriginRect = null, pvTimer = null;
 
       /**
-       * 扑克牌堆卡片定位样式（第 1 张最上层，rotate/left/z 按序错落）
-       * @param {number} i 卡片序号（0 起，取前 4 张）
+       * 扑克牌堆卡片定位样式（第 1 张最上层，rotate/left/z 按序错落，最多 6 张全可见）
+       * @param {number} i 卡片序号（0 起，取前 6 张）
        */
       function stackCardStyle(i) {
-        // 窄窗（!isWideWindow）牌堆缩至 3 张，偏移收紧避免溢出（30+52=82px < 96px）
-        const narrow = !isWideWindow.value;
-        const rot = [-5, -1, 3, 7][i] || 0;
-        const left = (narrow ? [2, 16, 30] : [2, 18, 34, 50])[i] || 0;
-        const z = [4, 3, 2, 1][i] || 1;
+        const rot = [-5, -1, 3, 7, -2, 5][i] || 0;
+        const left = [2, 14, 26, 38, 50, 62][i] || 0;
+        const z = [6, 5, 4, 3, 2, 1][i] || 1;
         return { left: left + 'px', transform: 'rotate(' + rot + 'deg)', zIndex: z };
       }
 
       /**
-       * 备注 mini 牌堆卡片定位样式（缩小版：卡片 44×60、偏移 [2,16,30]、rot 同款）
-       * 最多展示 3 张，第 1 张最上层，点击整堆从第一张进查看器
+       * 备注 mini 牌堆卡片定位样式（缩小版：卡片 44×60、偏移 [2,12,24,36,48,60]，最多 6 张）
+       * 第 1 张最上层，点击整堆从第一张进查看器
        */
       function noteStackCardStyle(i) {
-        const rot = [-5, -1, 3][i] || 0;
-        const left = [2, 16, 30][i] || 0;
-        const z = [3, 2, 1][i] || 1;
+        const rot = [-5, -1, 3, 7, -2, 5][i] || 0;
+        const left = [2, 12, 24, 36, 48, 60][i] || 0;
+        const z = [6, 5, 4, 3, 2, 1][i] || 1;
         return { left: left + 'px', transform: 'rotate(' + rot + 'deg)', zIndex: z };
       }
 
@@ -2201,6 +2716,8 @@
        */
       function openPreview(bug, filename, evt) {
         if (!bug || !Array.isArray(bug.images) || !bug.images.length) return;
+        previewBug.value = bug;
+        previewDeleteVisible.value = false;
         previewImages.value = [...bug.images];
         const idx = filename ? bug.images.indexOf(filename) : 0;
         previewIndex.value = idx === -1 ? 0 : idx;
@@ -2239,6 +2756,8 @@
        */
       function closePreview() {
         clearTimeout(pvTimer);
+        previewBug.value = null;
+        previewDeleteVisible.value = false;
         // 取出起点矩形后立即重置，避免备注图预览等无起点路径命中 stale 的缩回分支
         const r = pvOriginRect; pvOriginRect = null;
         const zoom = pvZoom.value;
@@ -2266,11 +2785,60 @@
       }
 
       /**
+       * 备注图预览（任务级/条目级共用）：直接进查看器，不设置归属 bug（无删除钮）
+       */
+      function openNoteImagePreview(images) {
+        previewBug.value = null;
+        previewDeleteVisible.value = false;
+        if (!Array.isArray(images) || !images.length) return;
+        previewImages.value = [...images];
+        previewIndex.value = 0;
+        previewImageUrl.value = '//' + serverHost.value + '/uploads/' + encodeURIComponent(images[0]);
+        imagePreviewVisible.value = true;
+        previewStageReady.value = true;
+      }
+
+      /**
+       * 查看器内请求删除当前截图：弹居中确认框
+       */
+      function askPreviewDelete() { previewDeleteVisible.value = true; }
+
+      /** 取消查看器内删除 */
+      function cancelPreviewDelete() { previewDeleteVisible.value = false; }
+
+      /**
+       * 确认删除当前预览截图：
+       * 本地移除 + 同步服务端（服务端删文件并广播）→ 预览切到下一张；尾张则回第一张；删空则关闭查看器
+       */
+      function confirmPreviewDelete() {
+        const bug = previewBug.value;
+        if (!bug) { previewDeleteVisible.value = false; return; }
+        const filename = previewImages.value[previewIndex.value];
+        if (!filename) { previewDeleteVisible.value = false; return; }
+
+        deleteImage(bug, filename); // 从 bug.images 移除 + sendRemoveImage（服务端删文件 + 广播）
+
+        const idx = previewImages.value.indexOf(filename);
+        if (idx !== -1) previewImages.value.splice(idx, 1);
+        if (!previewImages.value.length) {
+          previewDeleteVisible.value = false;
+          closePreview(); // 删空：关闭查看器
+          return;
+        }
+        // 尾张 → 第一张；否则 splice 后当前索引即"下一张"
+        const newIdx = previewIndex.value >= previewImages.value.length ? 0 : previewIndex.value;
+        previewIndex.value = newIdx;
+        previewImageUrl.value = '//' + serverHost.value + '/uploads/' + encodeURIComponent(previewImages.value[newIdx]);
+        previewDeleteVisible.value = false;
+      }
+
+      /**
        * 全局 Esc 关闭查看器：仅查看器可见且无 Element Plus 弹窗时消费 Esc
-       * （有 .el-overlay 时让弹窗优先消费 Esc，避免误关查看器）
+       * （有 .el-overlay 时让弹窗优先消费 Esc，避免误关查看器；删除确认框打开时先取消确认）
        */
       function onGlobalKeydown(e) {
         if (e.key !== 'Escape') return;
+        if (previewDeleteVisible.value) { previewDeleteVisible.value = false; return; }
         if (!imagePreviewVisible.value) return;
         if (document.querySelector('.el-overlay')) return; // 有 Element Plus 弹窗时让弹窗优先消费 Esc
         closePreview();
@@ -2427,6 +2995,7 @@
         // 不再删除 localStorage 中的模式/地址：误点"重新选择启动模式"不应丢配置。
         // 仅在用户确认新模式/新地址时（confirmClientMode / confirmServerMode）才覆盖。
         disconnectReason.value = null; // 重置模式后清掉旧的断线原因文案
+        pendingQueue = []; // 重新选择模式：清空待发队列
         if (ws) {
           ws.onclose = null; // 避免触发自动重连逻辑
           ws.close();
@@ -2513,6 +3082,35 @@
         backupStatus,
         backupLabel,
 
+        // 主题（仅本机生效）
+        themes,
+        themeId,
+        themeMenuVisible,
+        themeMenuX,
+        themeMenuY,
+        toggleThemeMenu,
+        applyTheme,
+
+        // 更多菜单（导出 / 导入）
+        moreMenuVisible,
+        moreMenuX,
+        moreMenuY,
+        importFileInput,
+        toggleMoreMenu,
+        exportData,
+        onImportFileSelect,
+        launchRocket,
+
+        // 搜索
+        searchText,
+
+        // 组内排序（正序/倒序）
+        sortDesc,
+        toggleSort,
+
+        // 状态变更动画（手动 FLIP / 飞向 tag + 计数闪烁）
+        flashStatus,
+
         // 数据
         tasks,
         currentTaskId,
@@ -2525,7 +3123,7 @@
         isWideWindow,
         confirmBugId,
         dyingBugId,
-        coveringBugId,
+        fadingBugId,
         enteringBugId,
         newCardId,
         editingBugId,
@@ -2539,6 +3137,8 @@
         previewImages,
         previewIndex,
         previewStageReady,
+        previewBug,
+        previewDeleteVisible,
         pvZoom,
         uploadingBugId,
         fileInputRef,
@@ -2626,6 +3226,11 @@
         getNoteWriters,
         getNoteColor,
         openNotesDialog,
+        editingTaskNoteId,
+        startEditTaskNote,
+        confirmEditTaskNote,
+        cancelEditTaskNote,
+        isNoteModified,
         onTaskNoteEditKeydown,
         onTaskNoteNewKeydown,
         addNote,
@@ -2642,6 +3247,10 @@
         // 任务备注方法
         getBugNoteWriters,
         openBugNotesDialog,
+        editingBugNoteId,
+        startEditBugNote,
+        confirmEditBugNote,
+        cancelEditBugNote,
         addBugNote,
         addBugNoteWithImage,
         onChooseBugNoteImage,
@@ -2677,6 +3286,10 @@
         deleteImage,
         sendRemoveImage,
         openPreview,
+        openNoteImagePreview,
+        askPreviewDelete,
+        cancelPreviewDelete,
+        confirmPreviewDelete,
         previewPrev,
         previewNext,
         closePreview,

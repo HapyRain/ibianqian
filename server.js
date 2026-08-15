@@ -12,6 +12,9 @@ const INITIAL_PORT = 3050;
 const MAX_PORT = 3070;
 const BIND_ADDR = '0.0.0.0';
 
+// 程序版本号（唯一来源：package.json；前端底部栏经 __APP_VERSION__ 占位符注入显示）
+const { version: APP_VERSION } = require('./package.json');
+
 // 状态枚举（与前端 statusOptions 保持一致，服务端仅接受这三个值）
 const ALLOWED_STATUSES = ['待修复', '修复中', '已完成'];
 
@@ -155,6 +158,8 @@ function migrateData(data) {
         b.images = [b.image]; delete b.image;
       }
       if (!Array.isArray(b.images)) b.images = [];
+      // 组内排序依据（新来的往组末尾）：旧数据无时间戳 → 0（保持数组原序）
+      if (typeof b.statusChangedAt !== 'number') b.statusChangedAt = 0;
     }));
     // 旧格式：note.image 字符串 → images 数组（一次性备份，任务级与条目级分支共用 backupForNoteMigration）
     data.tasks.forEach(t => {
@@ -164,6 +169,8 @@ function migrateData(data) {
           n.images = [n.image]; delete n.image;
         }
         if (!Array.isArray(n.images)) n.images = [];
+        // 创建时间锚点（"已修改"判断）：旧数据缺省取 updatedAt（视为未修改过）
+        if (typeof n.createdAt !== 'number') n.createdAt = n.updatedAt || Date.now();
       });
       (t.bugs || []).forEach(b => ((b.notes) || []).forEach(n => {
         if (typeof n.image === 'string') {
@@ -171,6 +178,7 @@ function migrateData(data) {
           n.images = [n.image]; delete n.image;
         }
         if (!Array.isArray(n.images)) n.images = [];
+        if (typeof n.createdAt !== 'number') n.createdAt = n.updatedAt || Date.now();
       }));
     });
   }
@@ -233,6 +241,8 @@ async function updateData(transformFn) {
       throw renameErr; // 向上抛出，让调用方知道写入失败
     }
 
+    backupDataFile(); // 写盘成功后节流轮转备份（至少间隔 1 分钟）
+
     return { data, change, version: data.version };
   } finally {
     release();
@@ -242,6 +252,50 @@ async function updateData(transformFn) {
 // ================================================================
 // 辅助工具
 // ================================================================
+// 数据备份：每次写盘后节流轮转备份（保留最近 20 份）+ 删除前快照（保留最近 5 份）
+const BACKUP_DIR = path.join(DATA_ROOT, 'backups');
+const BACKUP_KEEP = 20;
+const PRE_DELETE_KEEP = 5;
+let lastDataBackup = 0;
+
+/** 轮转备份 data.json → backups/data-<时间戳>.json（1 分钟节流，保留最近 BACKUP_KEEP 份） */
+function backupDataFile() {
+  const now = Date.now();
+  if (now - lastDataBackup < 60000) return; // 节流：频繁写盘（如连续传图）不重复备份
+  lastDataBackup = now;
+  try {
+    if (!fs.existsSync(DATA_FILE)) return;
+    if (!fs.existsSync(BACKUP_DIR)) fs.mkdirSync(BACKUP_DIR, { recursive: true });
+    const stamp = formatTimestamp(new Date()).replace(/[: ]/g, '-');
+    const dest = path.join(BACKUP_DIR, 'data-' + stamp + '.json');
+    fs.copyFileSync(DATA_FILE, dest);
+    // 轮转：只保留最近 BACKUP_KEEP 份
+    const files = fs.readdirSync(BACKUP_DIR).filter(f => f.startsWith('data-')).sort();
+    while (files.length > BACKUP_KEEP) {
+      fs.unlinkSync(path.join(BACKUP_DIR, files.shift()));
+    }
+    console.log(`[Backup] data.json 已备份（${BACKUP_DIR} 保留 ${BACKUP_KEEP} 份）`);
+  } catch (e) {
+    console.error('[Backup] 轮转备份失败:', e.message);
+  }
+}
+
+/** 删除类操作前的即时快照（不节流，保证删除前一刻的数据可回滚，保留最近 PRE_DELETE_KEEP 份） */
+function snapshotBeforeDelete() {
+  try {
+    if (!fs.existsSync(DATA_FILE)) return;
+    if (!fs.existsSync(BACKUP_DIR)) fs.mkdirSync(BACKUP_DIR, { recursive: true });
+    const dest = path.join(BACKUP_DIR, 'pre-delete-' + Date.now() + '.json');
+    fs.copyFileSync(DATA_FILE, dest);
+    const files = fs.readdirSync(BACKUP_DIR).filter(f => f.startsWith('pre-delete-')).sort();
+    while (files.length > PRE_DELETE_KEEP) {
+      fs.unlinkSync(path.join(BACKUP_DIR, files.shift()));
+    }
+    console.log(`[Backup] 删除前快照: ${path.basename(dest)}`);
+  } catch (e) {
+    console.error('[Backup] 删除前快照失败:', e.message);
+  }
+}
 function getLocalIPs() {
   const interfaces = os.networkInterfaces();
   const addresses = [];
@@ -312,9 +366,10 @@ async function handleUpdate(ws, msg, _wss) {
     if (!bug) return null;
     bug[field] = value;
 
-    // 状态变更时自动管理 completedAt 时间锚点
+    // 状态变更时自动管理 completedAt 时间锚点 + statusChangedAt（组内排序依据：新来的往组末尾）
     let completedAt = undefined;
     if (field === 'status') {
+      bug.statusChangedAt = Date.now();
       if (value === '已完成') {
         completedAt = formatTimestamp(new Date());
         bug.completedAt = completedAt;
@@ -324,7 +379,7 @@ async function handleUpdate(ws, msg, _wss) {
       }
     }
 
-    return { type: 'update', taskId, bugId, field, value, completedAt };
+    return { type: 'update', taskId, bugId, field, value, completedAt, statusChangedAt: bug.statusChangedAt };
   });
 
   if (result.change) {
@@ -366,8 +421,9 @@ async function handleAdd(ws, msg, _wss) {
     if (!task) return null;
     // 检查是否已存在（防重复）
     if (task.bugs.some(b => b.id === bug.id)) return null;
-    // 归一化：确保 images 字段为数组（旧客户端 add 不带 images）
+    // 归一化：确保 images 字段为数组（旧客户端 add 不带 images）；statusChangedAt 缺省为当前时间
     const normalizedBug = { ...bug, images: Array.isArray(bug.images) ? bug.images : [] };
+    if (typeof normalizedBug.statusChangedAt !== 'number') normalizedBug.statusChangedAt = Date.now();
     task.bugs.push(normalizedBug);
     return { type: 'add', taskId, bug: { ...normalizedBug } };
   });
@@ -386,6 +442,7 @@ async function handleDelete(ws, msg, _wss) {
   const { taskId, bugId } = msg.data || {};
   if (!taskId || !bugId) return;
 
+  snapshotBeforeDelete(); // 删除前快照：可回滚
   // 闭包收集被删 bug 的全部图片文件名（不放进 change，避免污染广播协议）
   const deletedImages = [];
   const result = await updateData((data) => {
@@ -474,6 +531,7 @@ async function handleDeleteTask(ws, msg, _wss) {
   const { taskId } = msg.data || {};
   if (!taskId) return;
 
+  snapshotBeforeDelete(); // 删除前快照：可回滚
   // 闭包收集该任务下所有图片文件名（不放进 change，避免污染广播协议）
   const deletedImages = [];
   const result = await updateData((data) => {
@@ -528,8 +586,11 @@ async function handleAddNote(ws, msg, _wss) {
     if (!task) return null;
     if (!task.notes) task.notes = [];
     if (task.notes.some(n => n.id === note.id)) return null;
-    task.notes.push({ ...note });
-    return { type: 'addNote', taskId, note: { ...note } };
+    // 创建时间锚点（"已修改"判断）：旧客户端不带 createdAt 时补默认值
+    const normalized = { ...note };
+    if (typeof normalized.createdAt !== 'number') normalized.createdAt = normalized.updatedAt || Date.now();
+    task.notes.push(normalized);
+    return { type: 'addNote', taskId, note: { ...normalized } };
   });
 
   if (result.change) {
@@ -614,6 +675,7 @@ async function handleDeleteNote(ws, msg, _wss) {
   const { taskId, noteId } = msg.data || {};
   if (!taskId || !noteId) return;
 
+  snapshotBeforeDelete(); // 删除前快照：可回滚
   let deletedNoteImages = [];
   const result = await updateData((data) => {
     const task = data.tasks.find(t => t.id === taskId);
@@ -672,8 +734,11 @@ async function handleAddBugNote(ws, msg, _wss) {
     const { bug } = findBugAndNote(data.tasks, taskId, bugId);
     if (!bug) return null;
     if (bug.notes.some(n => n.id === note.id)) return null;
-    bug.notes.push({ ...note });
-    return { type: 'addBugNote', taskId, bugId, note: { ...note } };
+    // 创建时间锚点（"已修改"判断）：旧客户端不带 createdAt 时补默认值
+    const normalized = { ...note };
+    if (typeof normalized.createdAt !== 'number') normalized.createdAt = normalized.updatedAt || Date.now();
+    bug.notes.push(normalized);
+    return { type: 'addBugNote', taskId, bugId, note: { ...normalized } };
   });
 
   if (result.change) {
@@ -756,6 +821,7 @@ async function handleDeleteBugNote(ws, msg, _wss) {
   const { taskId, bugId, noteId } = msg.data || {};
   if (!taskId || !bugId || !noteId) return;
 
+  snapshotBeforeDelete(); // 删除前快照：可回滚
   let deletedNoteImages = [];
   const result = await updateData((data) => {
     const { bug, note } = findBugAndNote(data.tasks, taskId, bugId, noteId);
@@ -876,8 +942,13 @@ function serveStaticFile(res, filePath) {
         res.end('500 Internal Server Error');
       }
     } else {
-      res.writeHead(200, { 'Content-Type': contentType });
-      res.end(content);
+      // HTML 注入：__APP_VERSION__ 占位符 ← package.json 的 version（唯一版本来源，改一处即可）
+      let body = content;
+      if (ext === '.html') {
+        body = Buffer.from(content.toString('utf-8').replace(/__APP_VERSION__/g, APP_VERSION), 'utf-8');
+      }
+      res.writeHead(200, { 'Content-Type': contentType, 'Cache-Control': 'no-cache' });
+      res.end(body);
     }
   });
 }
@@ -1291,6 +1362,7 @@ async function handleDeleteUpload(req, res, filename) {
       return;
     }
 
+    snapshotBeforeDelete(); // 删除前快照：可回滚
     const filePath = path.join(UPLOADS_DIR, filename);
 
     // 确保文件在 uploads 目录内（二次防护）
@@ -1386,6 +1458,109 @@ async function handleDeleteUpload(req, res, filename) {
   }
 }
 
+// ================================================================
+// 数据导出 / 导入（JSON，含 schema 归一化；图片需随 uploads/ 目录迁移）
+// ================================================================
+function handleExportData(res) {
+  try {
+    const data = readData();
+    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+    res.end(JSON.stringify(data, null, 2));
+  } catch (e) {
+    console.error('[Export] 失败:', e.message);
+    res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
+    res.end(JSON.stringify({ success: false, error: '导出失败' }));
+  }
+}
+
+function normalizeNoteForImport(n) {
+  return {
+    id: (typeof n.id === 'string' && n.id) ? n.id : crypto.randomUUID(),
+    clientId: typeof n.clientId === 'string' ? n.clientId : '__import__',
+    content: typeof n.content === 'string' ? n.content : '',
+    createdAt: typeof n.createdAt === 'number' ? n.createdAt : (typeof n.updatedAt === 'number' ? n.updatedAt : Date.now()),
+    updatedAt: typeof n.updatedAt === 'number' ? n.updatedAt : Date.now(),
+    ...(n.authorName ? { authorName: n.authorName } : {}),
+    images: Array.isArray(n.images) ? n.images.filter(x => typeof x === 'string') : [],
+  };
+}
+
+function normalizeBugForImport(b) {
+  return {
+    id: (typeof b.id === 'string' && b.id) ? b.id : crypto.randomUUID(),
+    name: typeof b.name === 'string' ? b.name : '',
+    status: ALLOWED_STATUSES.includes(b.status) ? b.status : '待修复',
+    statusChangedAt: typeof b.statusChangedAt === 'number' ? b.statusChangedAt : 0,
+    images: Array.isArray(b.images) ? b.images.filter(x => typeof x === 'string') : [],
+    notes: Array.isArray(b.notes) ? b.notes.map(normalizeNoteForImport) : [],
+    ...(b.completedAt ? { completedAt: b.completedAt } : {}),
+  };
+}
+
+function normalizeTaskForImport(t) {
+  return {
+    id: (typeof t.id === 'string' && t.id) ? t.id : crypto.randomUUID(),
+    name: (typeof t.name === 'string' && t.name.trim()) ? t.name : '未命名项目',
+    bugs: Array.isArray(t.bugs) ? t.bugs.map(normalizeBugForImport) : [],
+    notes: Array.isArray(t.notes) ? t.notes.map(normalizeNoteForImport) : [],
+  };
+}
+
+function handleImportData(req, res) {
+  const MAX_IMPORT = 50 * 1024 * 1024; // 50MB
+  const chunks = [];
+  let total = 0;
+  let over = false;
+  req.on('data', (chunk) => {
+    if (over) return;
+    total += chunk.length;
+    if (total > MAX_IMPORT) { over = true; chunks.length = 0; return; }
+    chunks.push(chunk);
+  });
+  req.on('end', async () => {
+    if (over) {
+      res.writeHead(413, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify({ success: false, error: '导入文件过大（最大 50MB）' }));
+      return;
+    }
+    let parsed;
+    try {
+      parsed = JSON.parse(Buffer.concat(chunks).toString('utf-8'));
+    } catch (e) {
+      res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify({ success: false, error: 'JSON 解析失败' }));
+      return;
+    }
+    if (!parsed || !Array.isArray(parsed.tasks)) {
+      res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify({ success: false, error: '格式不正确（缺少 tasks 数组）' }));
+      return;
+    }
+    const tasks = parsed.tasks.map(normalizeTaskForImport);
+
+    // 统计引用但缺失的图片文件（提示用户需手动迁移 uploads/）
+    const referenced = new Set();
+    tasks.forEach(t => (t.bugs || []).forEach(b => (b.images || []).forEach(f => referenced.add(f))));
+    let missing = 0;
+    referenced.forEach(f => { if (!fs.existsSync(path.join(UPLOADS_DIR, f))) missing++; });
+
+    try {
+      const result = await updateData((data) => {
+        data.tasks = tasks;
+        return { type: '__import__' }; // 非 null → 写盘 + 版本递增
+      });
+      // 广播全量同步给所有客户端（含发起方）
+      broadcast(_wss, { type: 'fullSync', data: result.data, version: result.version });
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify({ success: true, version: result.version, missingImages: missing }));
+    } catch (e) {
+      console.error('[Import] 写盘失败:', e.message);
+      res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify({ success: false, error: '导入写盘失败' }));
+    }
+  });
+}
+
 function createHttpHandler() {
   const NODE_MODULES_DIR = path.join(__dirname, 'node_modules');
 
@@ -1394,6 +1569,16 @@ function createHttpHandler() {
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Bug-Id, X-Client-Id, X-Task-Id, X-Note-Id, X-Bug-Note-Id');
+
+    // API 路由：数据导出 / 导入
+    if (req.method === 'GET' && req.url.startsWith('/api/export')) {
+      handleExportData(res);
+      return;
+    }
+    if (req.method === 'POST' && req.url.startsWith('/api/import')) {
+      handleImportData(req, res);
+      return;
+    }
 
     // API 路由：图片上传
     if (req.method === 'POST' && req.url.startsWith('/api/upload')) {
@@ -1421,7 +1606,7 @@ function createHttpHandler() {
       const uploadFilename = decodeURIComponent(rawName);
       const fullPath = path.join(UPLOADS_DIR, uploadFilename);
       const fileExists = fs.existsSync(fullPath);
-      console.log(`[Static] 图片请求: raw="${rawName}", decoded="${uploadFilename}", path="${fullPath}", exists=${fileExists}`);
+      if (!fileExists) console.log(`[Static] 图片不存在: ${uploadFilename}`);
       if (isSafeFilename(uploadFilename)) {
         serveStaticFile(res, fullPath);
       } else {

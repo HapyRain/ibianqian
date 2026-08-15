@@ -13,6 +13,9 @@ uploads/
 data.json.corrupted.*
 data.json.backup-*
 
+# 本地开发辅助配置（不入库）
+.dsh/
+
 # 视觉伴侣与设计过程文件（可选保留，按需取消注释）
 .superpowers/
 .claude/
