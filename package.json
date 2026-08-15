@@ -1,6 +1,6 @@
 {
   "name": "ibianqian-buglist",
-  "version": "1.0.0",
+  "version": "0.1.0",
   "description": "多人协同 Bug 清单工具",
   "main": "electron/main.js",
   "scripts": {
@@ -8,6 +8,7 @@
     "dev": "node --watch server.js",
     "electron": "electron .",
     "build": "electron-builder --win portable --config electron-builder.yml",
+    "test": "node test-validation-guards.js && node test-image-lifecycle.js && node test-note-image.js && node test-note-ownership.js && node test-template-guard.js",
     "postinstall": "node build/setup-7za-proxy.js"
   },
   "dependencies": {

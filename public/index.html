@@ -4,6 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>任务清单</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
   <!-- Google Fonts -->
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -102,6 +103,16 @@
           <span class="client-count" v-if="connectionStatus === 'connected'">
             在线：{{ onlineCount }}
           </span>
+          <span class="theme-box">
+            <button class="theme-btn" @click="toggleThemeMenu($event)" title="切换主题" aria-label="切换主题">
+              <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9.5"/><path d="M12 2.5v4M12 17.5v4M2.5 12h4M17.5 12h4"/><circle cx="12" cy="12" r="3.2"/></svg>
+            </button>
+          </span>
+          <span class="theme-box">
+            <button class="theme-btn" @click="toggleMoreMenu($event)" title="更多操作（导出/导入数据）" aria-label="更多操作">
+              <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="5.5" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="12" cy="18.5" r="1.6"/></svg>
+            </button>
+          </span>
         </div>
       </header>
 
@@ -145,60 +156,71 @@
               v-if="tasks.length > 1"
               class="task-tab-close"
               @click.stop="deleteTask(task.id)"
-              title="删除任务"
+              title="删除项目"
             ><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 6l12 12M18 6L6 18"/></svg></span>
           </div>
         </div>
-        <button class="new-task-btn btn-add btn-add-sm" @click="createTask" title="新建任务"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.5"/><path d="M12 8.5v7M8.5 12h7"/></svg></button>
+        <el-button type="primary" class="btn-add-project" @click="createTask" title="新建项目">
+          <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.5"/><path d="M12 8.5v7M8.5 12h7"/></svg><span class="btn-label">新增项目</span>
+        </el-button>
       </div>
 
-      <!-- 工具栏 -->
-      <div class="toolbar">
+      <!-- 任务列表卡片：搜索条 + 筛选/新增 + 任务列表（主体） -->
+      <div class="bug-panel">
+      <!-- 搜索条：单独一行 -->
+      <div class="search-bar">
+        <el-input v-model="searchText" size="large" clearable placeholder="搜索任务名称…" class="search-input-big">
+          <template #prefix>
+            <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
+          </template>
+        </el-input>
+      </div>
+      <!-- 筛选 + 新增任务 -->
+      <div class="list-head">
         <div class="filter-buttons">
           <el-button
             v-for="f in ['全部', ...statusOptions]"
             :key="f"
+            :data-status="f"
             :type="statusFilter === f ? 'primary' : ''"
             size="small"
-            :class="filterStatusClass(f)"
+            :class="[filterStatusClass(f), { 'filter-flash': flashStatus === f }]"
             @click="setStatusFilter(f)"
           >{{ f }} ({{ statusCounts[f] || 0 }})</el-button>
-        </div>
-        <div class="toolbar-actions">
-          <el-button type="primary" class="btn-icon btn-add" @click="addBug" :disabled="!currentTaskId">
-            <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.5"/><path d="M12 8.5v7M8.5 12h7"/></svg>新增任务
+          <!-- 组内排序开关（筛选栏最后）：倒序=新来的在前，正序=新来的在后 -->
+          <el-button size="small" class="btn-sort" @click="toggleSort" :title="sortDesc ? '倒序：新任务在前（点击切换为正序）' : '正序：新任务在后（点击切换为倒序）'">
+            <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path v-if="sortDesc" d="M12 4v16M6 14l6 6 6-6"/>
+              <path v-else d="M12 20V4M6 10l6-6 6 6"/>
+            </svg><span class="btn-sort-label">{{ sortDesc ? '倒序' : '正序' }}</span>
           </el-button>
-          <span class="bug-count">共 {{ currentTask?.bugs?.length || 0 }} 条记录</span>
         </div>
+        <el-button class="btn-add-task" @click="addBug" :disabled="!currentTaskId" title="新增任务">
+          <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.5"/><path d="M12 8.5v7M8.5 12h7"/></svg><span class="btn-label">新增任务</span>
+        </el-button>
       </div>
 
-      <!-- 任务列表（自定义行） -->
+      <!-- 列表区：任务行（主体） -->
       <div class="bug-list" :class="{ 'bug-list-wide': isWideWindow }">
+        <!-- 任务行列表（TransitionGroup 仅作列表容器；移动/飞出动画由 JS 手动驱动） -->
+        <TransitionGroup tag="div" class="bug-rows" :css="false">
         <div
           v-for="bug in filteredAndSortedBugs"
           :key="bug.id"
           :data-bug-id="bug.id"
           class="bug-row"
-          :class="{ 'bug-row-spotlight': confirmBugId === bug.id, 'bug-row-dying': dyingBugId === bug.id, 'bug-row-covering': coveringBugId === bug.id, 'row-enter': enteringBugId === bug.id }"
+          :class="{ 'bug-row-spotlight': confirmBugId === bug.id, 'bug-row-dying': dyingBugId === bug.id, 'bug-row-fade': fadingBugId === bug.id, 'row-enter': enteringBugId === bug.id }"
         >
           <div class="bug-cell bug-name" @dblclick="startEditName(bug)">
             <el-input v-if="editingBugId === bug.id" :model-value="bug.name" @update:model-value="bug.name = $event"
               size="small" placeholder="请输入任务名称" @blur="finishEditName(bug)" @keyup.enter="finishEditName(bug)" @keyup.escape="cancelEditName(bug)" ></el-input>
             <span v-else class="name-text" :class="{ 'name-placeholder': !bug.name }">{{ bug.name || '双击编辑名称...' }}</span>
           </div>
-          <div class="bug-cell bug-status">
-            <el-select :model-value="bug.status" @update:model-value="onStatusChange(bug, $event)" size="small"
-              :class="['status-select', 'status-select-' + getStatusClass(bug.status)]">
-              <el-option v-for="opt in statusOptions" :key="opt" :label="opt" :value="opt">
-                <span class="status-option"><span class="status-tag-dot" :class="getStatusClass(opt)"></span>{{ opt }}</span>
-              </el-option>
-            </el-select>
-          </div>
           <div class="bug-cell bug-shots" @dragover="onDragOver" @dragleave="onDragLeave" @drop="onDrop($event, bug.id)">
-            <!-- 扑克牌堆：最多叠放 4 张，第 1 张最上层，hover 抽卡 -->
+            <!-- 扑克牌堆：最多叠放 6 张，第 1 张最上层，hover 抽卡 -->
             <div class="img-stack" v-if="(bug.images||[]).length">
               <div
-                v-for="(img, i) in (bug.images||[]).slice(0, isWideWindow ? 4 : 3)"
+                v-for="(img, i) in (bug.images||[]).slice(0, 6)"
                 :key="img"
                 class="img-stack-card"
                 :class="{ 'card-drop': newCardId === img }"
@@ -212,6 +234,33 @@
             </button>
             <button v-if="(bug.images||[]).length" class="shot-add-more btn-upload" @click.stop="triggerImageMenu($event, bug.id)" aria-label="添加截图">＋</button>
           </div>
+          <div class="bug-cell bug-status">
+            <el-select :model-value="bug.status" @update:model-value="onStatusChange(bug, $event)" size="small"
+              :class="['status-select', 'status-select-' + getStatusClass(bug.status)]">
+              <!-- 前缀状态图标：修复中=扳手拧螺栓（棘轮步进），已完成=电池充电（偶尔滋滋），待修复=平静呼吸点 -->
+              <template #prefix>
+                <span class="status-sel-icon" :class="getStatusClass(bug.status)">
+                  <svg v-if="bug.status === '修复中'" class="si-fixing" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+                    <g class="si-bolt">
+                      <path d="M12 6.9l4.5 2.6v5.2L12 17.3l-4.5-2.6V9.5z"/>
+                    </g>
+                    <path d="M15.6 14.9c1.3 1.3 1.3 3.5 0 4.8" />
+                    <path d="M15.6 17.3l6 6" stroke-width="2.2" stroke-linecap="round"/>
+                  </svg>
+                  <svg v-else-if="bug.status === '已完成'" class="si-done" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                    <rect x="3" y="8.5" width="15" height="8" rx="2"/>
+                    <path d="M20.5 10.8v3.4"/>
+                    <path class="si-boltflash" d="M11.4 9.6l-2.9 4.4h2.7l-.9 2.8 3.6-4.9h-2.6l1.2-2.3z" fill="#FFC53D" stroke="none"/>
+                    <path class="si-spark" d="M21.2 4.6l.6 1.3 1.3.6-1.3.6-.6 1.3-.6-1.3-1.3-.6 1.3-.6z" fill="#FFC53D" stroke="none"/>
+                  </svg>
+                  <span v-else class="si-pending-dot"></span>
+                </span>
+              </template>
+              <el-option v-for="opt in statusOptions" :key="opt" :label="opt" :value="opt">
+                <span class="status-option"><span class="status-tag-dot" :class="getStatusClass(opt)"></span>{{ opt }}</span>
+              </el-option>
+            </el-select>
+          </div>
           <div class="bug-cell bug-notes">
             <button class="btn-note" @click.stop="openBugNotesDialog(currentTaskId, bug.id)" aria-label="条目备注" title="备注">
               <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.4 8.4 0 01-8.5 8.5 8.5 8.5 0 01-3.8-.9L3 21l1.9-5.7a8.5 8.5 0 01-.9-3.8 8.5 8.5 0 014.7-7.6 8.4 8.4 0 013.8-.9h.5a8.5 8.5 0 018 8z"/></svg>
@@ -219,22 +268,24 @@
             </button>
           </div>
           <div class="bug-cell bug-actions">
-            <button class="btn-del" @mousedown="onDelDown(bug, $event)" @mouseup="onDelUp(bug, $event)" aria-label="删除该条目">
-              <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16"/><path d="M9 7V4.5h6V7"/><path d="M6 7l1 13h10l1-13"/><path d="M10 11v6M14 11v6"/></svg>删除
+            <button class="btn-del" @mousedown="onDelDown(bug, $event)" @mouseup="onDelUp(bug, $event)" aria-label="删除该任务" title="删除该任务">
+              <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16"/><path d="M9 7V4.5h6V7"/><path d="M6 7l1 13h10l1-13"/><path d="M10 11v6M14 11v6"/></svg>
             </button>
             <span class="del-confirm" :class="{show: confirmBugId===bug.id}">
-              <span>确认删除本条？</span>
+              <span>确认删除该任务？</span>
               <button class="ok" @click.stop="confirmDeleteBug(bug)">确认删除</button>
               <button class="no" @click.stop="cancelDeleteConfirm()">取消</button>
             </span>
           </div>
         </div>
+        </TransitionGroup>
         <div v-if="!filteredAndSortedBugs.length" class="empty-state">
           <span class="empty-icon"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="3" width="14" height="18" rx="2.5"/><path d="M9 3v2h6V3"/><path d="M8 10h8M8 14h5"/></svg></span>
           <p>暂无任务记录</p>
           <p class="empty-hint">点击「新增任务」开始记录</p>
         </div>
       </div>
+      </div><!-- /bug-panel -->
 
       <!-- 隐藏的文件选择器（用于点击上传，支持多选） -->
       <input
@@ -246,8 +297,17 @@
         @change="onFileSelect"
       />
 
+      <!-- 隐藏的导入文件选择器（JSON 备份） -->
+      <input
+        type="file"
+        accept=".json,application/json"
+        ref="importFileInput"
+        style="display: none;"
+        @change="onImportFileSelect"
+      />
+
       <!-- 备注弹窗 -->
-      <el-dialog v-model="notesDialogVisible" :title="'备注 - ' + (notesDialogTask?.name || '')" width="600px" class="sheet-dialog" @close="newNoteContent = ''; clearPendingNoteImage(); attachTargetNote = null">
+      <el-dialog v-model="notesDialogVisible" :title="'备注 - ' + (notesDialogTask?.name || '')" width="600px" class="sheet-dialog" @close="newNoteContent = ''; clearPendingNoteImage(); attachTargetNote = null; editingTaskNoteId = null">
         <!-- 无备注 -->
         <div v-if="!notesDialogTask?.notes?.length" class="notes-empty">
           <span class="notes-empty-icon"><svg class="icon icon-edit" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg></span>
@@ -261,27 +321,27 @@
               <span class="note-author-dot" :style="{ background: getNoteColor(note.clientId) }"></span>
               {{ note.authorName || (note.clientId === clientId ? '我' : note.clientId.substring(0, 8)) }}
             </span>
-            <span class="note-time">{{ formatTime(note.updatedAt) }}</span>
-            <el-button v-if="note.clientId === clientId" type="danger" size="small" text @click="deleteNote(note.id)">
-              删除
-            </el-button>
+            <span class="note-time">{{ formatTime(note.updatedAt) }}<span v-if="isNoteModified(note)" class="note-edited">（已修改）</span></span>
+            <template v-if="note.clientId === clientId">
+              <el-button v-if="editingTaskNoteId !== note.id" size="small" text @click="startEditTaskNote(note)">修改</el-button>
+              <el-button type="danger" size="small" text @click="deleteNote(note.id)">删除</el-button>
+            </template>
           </div>
           <!-- 备注图片：mini 牌堆（点击整堆从第一张进查看器；仅作者可逐张删图） -->
           <div class="note-image-row" v-if="(note.images||[]).length">
             <div class="note-stack" title="查看大图"
-              @click="previewImages = [...(note.images||[])]; previewIndex = 0; previewImageUrl = '//' + serverHost + '/uploads/' + encodeURIComponent((note.images||[])[0]); imagePreviewVisible = true; previewStageReady = true">
-              <div v-for="(img, i) in (note.images||[]).slice(0, 3)" :key="img" class="note-stack-card" :style="noteStackCardStyle(i)">
+              @click="openNoteImagePreview(note.images || [])">
+              <div v-for="(img, i) in (note.images||[]).slice(0, 6)" :key="img" class="note-stack-card" :style="noteStackCardStyle(i)">
                 <img :src="'//' + serverHost + '/uploads/' + encodeURIComponent(img)" alt="备注图片" loading="lazy" decoding="async" />
                 <span v-if="note.clientId === clientId" class="note-stack-del" @click.stop="updateNoteImage(note.id, img)" title="删除该图">✕</span>
               </div>
               <span v-if="(note.images||[]).length > 3" class="note-stack-count">{{ (note.images||[]).length }} 张</span>
             </div>
           </div>
-          <span v-if="note.clientId === clientId" class="note-image-add">
-            <el-button size="small" text type="primary" class="btn-icon" @click="pickAttachImage(note)"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15V3"/><path d="M7 8l5-5 5 5"/><path d="M4 17v3h16v-3"/></svg>图</el-button>
-          </span>
-          <!-- 自己的备注可编辑 -->
-          <div v-if="note.clientId === clientId">
+          <!-- 查看模式（默认）：只读显示内容，不出现上传/确认按钮 -->
+          <div v-if="note.clientId !== clientId || editingTaskNoteId !== note.id" class="note-content">{{ note.content }}</div>
+          <!-- 编辑模式：仅点击"修改"后展开（含上传图片，纯 CSS 挂载动画，无闪现/共存） -->
+          <div v-if="note.clientId === clientId && editingTaskNoteId === note.id" class="note-edit-box note-edit-in">
             <el-input
               :model-value="note.content"
               @update:model-value="note.content = $event"
@@ -291,12 +351,11 @@
               placeholder="输入备注..."
             ></el-input>
             <div class="note-confirm-bar">
-              <span class="note-hint">Enter 确认 · Shift+Enter 换行</span>
-              <button class="note-confirm-btn" @click="updateNote(note.id, note.content)">确认</button>
+              <el-button size="small" class="btn-icon btn-upload" @click="pickAttachImage(note)"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15V3"/><path d="M7 8l5-5 5 5"/><path d="M4 17v3h16v-3"/></svg>上传图片</el-button>
+              <button class="note-confirm-btn" @click="confirmEditTaskNote(note)">确认</button>
+              <button class="note-cancel-btn" @click="cancelEditTaskNote(note)">取消</button>
             </div>
           </div>
-          <!-- 别人的备注只读 -->
-          <div v-else class="note-content">{{ note.content }}</div>
         </div>
         <!-- 新增备注 -->
         <div class="note-new">
@@ -327,7 +386,7 @@
       </el-dialog>
 
       <!-- 任务备注弹窗 -->
-      <el-dialog v-model="bugNotesVisible" :title="'任务备注' + (bugNotesTargetBug?.name ? ' - ' + bugNotesTargetBug.name : '')" width="600px" class="sheet-dialog" @close="newBugNoteContent = ''; clearPendingBugNoteImage(); attachTargetBugNote = null">
+      <el-dialog v-model="bugNotesVisible" :title="'任务备注' + (bugNotesTargetBug?.name ? ' - ' + bugNotesTargetBug.name : '')" width="600px" class="sheet-dialog" @close="newBugNoteContent = ''; clearPendingBugNoteImage(); attachTargetBugNote = null; editingBugNoteId = null">
         <div v-if="!bugNotesTargetBug?.notes?.length" class="notes-empty">
           <span class="notes-empty-icon"><svg class="icon icon-edit" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg></span>
           <p>暂无备注</p>
@@ -339,26 +398,27 @@
               <span class="note-author-dot" :style="{ background: getNoteColor(note.clientId) }"></span>
               {{ note.authorName || (note.clientId === clientId ? '我' : note.clientId.substring(0, 8)) }}
             </span>
-            <span class="note-time">{{ formatTime(note.updatedAt) }}</span>
-            <el-button v-if="note.clientId === clientId" type="danger" size="small" text @click="deleteBugNote(note.id)">
-              删除
-            </el-button>
+            <span class="note-time">{{ formatTime(note.updatedAt) }}<span v-if="isNoteModified(note)" class="note-edited">（已修改）</span></span>
+            <template v-if="note.clientId === clientId">
+              <el-button v-if="editingBugNoteId !== note.id" size="small" text @click="startEditBugNote(note)">修改</el-button>
+              <el-button type="danger" size="small" text @click="deleteBugNote(note.id)">删除</el-button>
+            </template>
           </div>
           <!-- 备注图片：mini 牌堆（点击整堆从第一张进查看器；仅作者可逐张删图） -->
           <div class="note-image-row" v-if="(note.images||[]).length">
             <div class="note-stack" title="查看大图"
-              @click="previewImages = [...(note.images||[])]; previewIndex = 0; previewImageUrl = '//' + serverHost + '/uploads/' + encodeURIComponent((note.images||[])[0]); imagePreviewVisible = true; previewStageReady = true">
-              <div v-for="(img, i) in (note.images||[]).slice(0, 3)" :key="img" class="note-stack-card" :style="noteStackCardStyle(i)">
+              @click="openNoteImagePreview(note.images || [])">
+              <div v-for="(img, i) in (note.images||[]).slice(0, 6)" :key="img" class="note-stack-card" :style="noteStackCardStyle(i)">
                 <img :src="'//' + serverHost + '/uploads/' + encodeURIComponent(img)" alt="备注图片" loading="lazy" decoding="async" />
                 <span v-if="note.clientId === clientId" class="note-stack-del" @click.stop="updateBugNoteImage(note.id, img)" title="删除该图">✕</span>
               </div>
               <span v-if="(note.images||[]).length > 3" class="note-stack-count">{{ (note.images||[]).length }} 张</span>
             </div>
           </div>
-          <span v-if="note.clientId === clientId" class="note-image-add">
-            <el-button size="small" text type="primary" class="btn-icon" @click="pickAttachBugImage(note)"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15V3"/><path d="M7 8l5-5 5 5"/><path d="M4 17v3h16v-3"/></svg>图</el-button>
-          </span>
-          <div v-if="note.clientId === clientId">
+          <!-- 查看模式（默认）：只读显示内容，不出现上传/确认按钮 -->
+          <div v-if="note.clientId !== clientId || editingBugNoteId !== note.id" class="note-content">{{ note.content }}</div>
+          <!-- 编辑模式：仅点击"修改"后展开（含上传图片，纯 CSS 挂载动画，无闪现/共存） -->
+          <div v-if="note.clientId === clientId && editingBugNoteId === note.id" class="note-edit-box note-edit-in">
             <el-input
               :model-value="note.content"
               @update:model-value="note.content = $event"
@@ -368,11 +428,11 @@
               placeholder="输入备注..."
             ></el-input>
             <div class="note-confirm-bar">
-              <span class="note-hint">Enter 确认 · Shift+Enter 换行</span>
-              <button class="note-confirm-btn" @click="updateBugNote(note.id, note.content)">确认</button>
+              <el-button size="small" class="btn-icon btn-upload" @click="pickAttachBugImage(note)"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15V3"/><path d="M7 8l5-5 5 5"/><path d="M4 17v3h16v-3"/></svg>上传图片</el-button>
+              <button class="note-confirm-btn" @click="confirmEditBugNote(note)">确认</button>
+              <button class="note-cancel-btn" @click="cancelEditBugNote(note)">取消</button>
             </div>
           </div>
-          <div v-else class="note-content">{{ note.content }}</div>
         </div>
         <div class="note-new">
           <!-- 已选待提交图片预览（多图，逐张可移除） -->
@@ -415,6 +475,44 @@
           <svg class="icon icon-clipboard-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="3" width="14" height="18" rx="2"/><path d="M9 3v2h6V3"/></svg> 粘贴截图
         </div>
       </div>
+      <!-- 更多菜单（导出 / 导入） -->
+      <div
+        v-show="moreMenuVisible"
+        class="theme-popover"
+        :style="{ left: moreMenuX + 'px', top: moreMenuY + 'px' }"
+        @click.stop
+      >
+        <div class="theme-item" @click="exportData">
+          <span class="more-icon"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12M7 10l5 5 5-5"/><path d="M4 19h16"/></svg></span>
+          <span class="theme-name">导出数据（JSON）</span>
+        </div>
+        <div class="theme-item" @click="importFileInput.click()">
+          <span class="more-icon"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15V3M7 8l5-5 5 5"/><path d="M4 19h16"/></svg></span>
+          <span class="theme-name">导入数据（JSON）</span>
+        </div>
+      </div>
+      <div v-if="moreMenuVisible" class="theme-menu-backdrop" @click="moreMenuVisible = false"></div>
+      <!-- 主题选择面板（fixed 定位，移出头部避免 overflow:hidden 裁剪与毛玻璃层叠上下文） -->
+      <div
+        v-show="themeMenuVisible"
+        class="theme-popover"
+        :style="{ left: themeMenuX + 'px', top: themeMenuY + 'px' }"
+        @click.stop
+      >
+        <div class="theme-popover-title">选择主题（仅本机生效）</div>
+        <div v-if="!themes.length" class="theme-empty">主题配色方案待定，敬请期待</div>
+        <div class="theme-item" v-for="t in themes" :key="t.id" :class="{active: themeId === t.id}" @click="applyTheme(t.id); themeMenuVisible = false">
+          <span class="theme-swatch">
+            <span class="dot" :style="{background: t.vars.bg}"></span>
+            <span class="dot" :style="{background: t.vars.surface}"></span>
+            <span class="dot" :style="{background: t.vars.primary}"></span>
+          </span>
+          <span class="theme-name">{{ t.name }}</span>
+          <span class="theme-check" v-if="themeId === t.id">✓</span>
+        </div>
+      </div>
+      <!-- 点击空白关闭主题面板 -->
+      <div v-if="themeMenuVisible" class="theme-menu-backdrop" @click="themeMenuVisible = false"></div>
       <!-- 点击空白关闭气泡 -->
       <div v-if="imageMenuVisible" class="image-menu-backdrop" @click="imageMenuVisible = false"></div>
 
@@ -442,6 +540,8 @@
         <span class="footer-divider">|</span>
         <span>客户端 ID：{{ shortClientId }}</span>
         <span class="footer-divider">|</span>
+        <span>程序版本：v__APP_VERSION__</span>
+        <span class="footer-divider">|</span>
         <span :title="backupStatus"><svg class="icon icon-save" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h11l5 5v11a2 2 0 01-2 2z"/><path d="M7 3v5h8"/><path d="M7 21v-6h10v6"/></svg> {{ backupLabel }}</span>
       </footer>
 
@@ -458,12 +558,43 @@
           <button class="pv-arrow r" :disabled="previewIndex>=previewImages.length-1" @click="previewNext" aria-label="下一张">›</button>
           <button class="pv-x" @click="closePreview" aria-label="关闭预览">✕</button>
           <div class="pv-tip" v-if="previewImages.length">{{ previewIndex+1 }} / {{ previewImages.length }}</div>
+          <!-- 查看器右下角删除（仅牌堆预览；备注图预览不显示） -->
+          <button v-if="previewBug" class="pv-del" @click="askPreviewDelete" aria-label="删除该截图" title="删除该截图">
+            <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16"/><path d="M9 7V4.5h6V7"/><path d="M6 7l1 13h10l1-13"/><path d="M10 11v6M14 11v6"/></svg>
+          </button>
+          <!-- 查看器内删除确认（居中，带渐隐入场/退场） -->
+          <transition name="pv-confirm">
+            <div class="pv-confirm" v-if="previewDeleteVisible" @click.self="cancelPreviewDelete">
+              <div class="pv-confirm-box">
+                <p class="pv-confirm-title">删除这张截图？</p>
+                <div class="pv-confirm-btns">
+                  <button class="no" @click="cancelPreviewDelete">取消</button>
+                  <button class="ok" @click="confirmPreviewDelete">确认删除</button>
+                </div>
+              </div>
+            </div>
+          </transition>
         </div>
       </div>
     </div>
 
     <!-- 删除确认幕布（渐隐黑，浮于列表之上、行聚光之下） -->
     <div class="del-scrim" :class="{show: confirmBugId!==null}" @click="cancelDeleteConfirm()"></div>
+
+    <!-- 小火箭：右侧常驻。hover 点火预热，点击发射 + 平滑回顶 -->
+    <button class="rocket-btn" @click="launchRocket" title="回到顶部" aria-label="回到顶部">
+      <span class="rocket-body">
+        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 2.8c2.9 1.5 4.6 4.6 4.6 8v5.4l-1.9 1.8H9.3L7.4 16.2v-5.4c0-3.4 1.7-6.5 4.6-8z"/>
+          <circle cx="12" cy="9.2" r="1.5"/>
+          <path d="M7 12.4 4.6 11v3.6L7 15.9"/>
+          <path d="M17 12.4l2.4-1.2v3.6L17 15.9"/>
+        </svg>
+      </span>
+      <svg class="rocket-flame" viewBox="0 0 24 24">
+        <path d="M12 17.5c-2.6 3-3.8 4.8-3.8 6.4a3.8 3.8 0 0 0 7.6 0c0-1.6-1.2-3.4-3.8-6.4z" fill="#FFB84D"/>
+      </svg>
+    </button>
   </div>
 
   <!-- Vue 3 -->
@@ -472,6 +603,8 @@
   <script src="/vendor/element-plus/dist/index.full.min.js"></script>
   <!-- Element Plus 中文语言包 -->
   <script src="/vendor/element-plus/dist/locale/zh-cn.min.js"></script>
+  <!-- 主题定义（10 套成品主题 + CSS 生成器） -->
+  <script src="themes.js"></script>
   <!-- 应用逻辑 -->
   <script src="app.js"></script>
 </body>

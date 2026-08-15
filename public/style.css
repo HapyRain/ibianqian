@@ -144,7 +144,6 @@ body {
   max-width: 960px;
   margin: 0 auto;
   padding: 24px 20px 40px;
-  animation: fadeIn 0.5s cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 /* ============================================================
@@ -158,10 +157,8 @@ body {
   gap: 12px;
   margin-bottom: 20px;
   padding: 16px 24px;
-  background: rgba(255, 255, 255, 0.72);
-  backdrop-filter: blur(24px) saturate(1.8);
-  -webkit-backdrop-filter: blur(24px) saturate(1.8);
-  border: 1px solid rgba(0, 0, 0, 0.05);
+  background: var(--surface-hi);
+  border: 1px solid var(--line-soft);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-card);
   position: relative;
@@ -338,10 +335,8 @@ body {
   gap: 6px;
   margin-bottom: 14px;
   padding: 8px 14px;
-  background: rgba(255, 255, 255, 0.68);
-  backdrop-filter: blur(20px) saturate(1.8);
-  -webkit-backdrop-filter: blur(20px) saturate(1.8);
-  border: 1px solid rgba(0, 0, 0, 0.05);
+  background: var(--surface-hi);
+  border: 1px solid var(--line-soft);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-card);
   overflow: hidden;
@@ -444,27 +439,9 @@ body {
 .task-tab.drop-before::before{left:-4px}
 .task-tab.drop-after::after{right:-4px}
 
-.new-task-btn {
-  width: 30px;
-  height: 30px;
-  border: 1px dashed rgba(0, 0, 0, 0.15);
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--text-2);
-  font-size: 1.2rem;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  transition: all var(--transition-fast);
-}
-
-.new-task-btn:hover {
-  border-color: var(--primary);
-  color: var(--primary);
-  background: var(--surface);
-}
+/* 新增项目按钮（标签栏右侧，实心主色凸显；与"新增任务"同尺寸同族） */
+.btn-add-project { border-radius: 9px; flex-shrink: 0; }
+.btn-add-project .icon { width: 15px; height: 15px; margin-right: 5px; }
 
 /* ============================================================
    备注按钮 + 指示器
@@ -545,26 +522,39 @@ body {
 }
 
 /* ============================================================
-   工具栏
+   任务列表卡片（工具栏 + 列表，总分一体）
    ============================================================ */
-.toolbar {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  margin-bottom: 16px;
-  padding: 12px 0;
+.bug-panel {
+  background: var(--surface);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card);
 }
 
-.toolbar-actions {
+/* ============================================================
+   搜索条（卡片头部，单独一行）
+   ============================================================ */
+.bug-panel .search-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 16px;
+  background: var(--surface-hi);
+  border-bottom: 1px solid var(--line-soft);
+  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+}
+.search-input-big { flex: 1; }
+.search-input-big .el-input__wrapper { border-radius: 10px; }
+.search-icon { width: 15px; height: 15px; color: var(--text-2); }
+
+/* 列表头：筛选 + 新增任务（横线之下，与任务行一体） */
+.list-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
-}
-
-.bug-count {
-  font-size: 0.84rem;
-  color: var(--text-2);
-  font-weight: 500;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 12px 16px 0;
 }
 
 /* ============================================================
@@ -576,6 +566,34 @@ body {
   gap: 8px;
   align-items: center;
 }
+
+/* 筛选按钮组 */
+.filter-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+/* 更多菜单（导出/导入）图标 */
+.more-icon { display: inline-flex; align-items: center; flex: none; }
+.more-icon .icon { width: 15px; height: 15px; }
+
+/* 组内排序开关（筛选栏最后）：中性次级按钮，箭头指示当前方向 */
+.btn-sort {
+  border-radius: var(--radius-pill);
+  --el-button-bg-color: rgba(0, 0, 0, 0.03);
+  --el-button-border-color: var(--line);
+  --el-button-text-color: var(--text-2);
+  --el-button-hover-bg-color: rgba(64, 158, 255, 0.1);
+  --el-button-hover-border-color: #409EFF;
+  --el-button-hover-text-color: #409EFF;
+  --el-button-active-bg-color: rgba(64, 158, 255, 0.16);
+  --el-button-active-border-color: #409EFF;
+  --el-button-active-text-color: #409EFF;
+}
+.btn-sort .icon { width: 13px; height: 13px; margin-right: 3px; }
+.btn-sort-label { font-size: 12px; }
 
 .filter-buttons .el-button {
   font-size: 0.84rem;
@@ -649,31 +667,90 @@ body {
 
 .status-select .el-select__wrapper {
   box-shadow: none !important;
-  border-radius: var(--radius-pill) !important;
-  transition: all var(--transition-fast) !important;
+  border-radius: 9px !important;
+  border: 1px solid var(--line);
   background: rgba(0, 0, 0, 0.02);
+  min-height: 32px;
+  height: 32px;
+  box-sizing: border-box;
 }
 
 .status-select .el-select__wrapper:hover {
   background: rgba(0, 0, 0, 0.04);
 }
 
-/* 待修复（状态色只保留在文字/圆点级，浅色背景块已去掉） */
+/* 状态胶囊（选中项）：软色底 + 文字颜色（无挂载动画，避免加载时位置偏移/闪烁） */
+.status-select .el-select__selected-item {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 10px;
+  height: 22px;
+  border-radius: var(--radius-pill);
+  font-weight: 600;
+  line-height: 1;
+}
+
+/* 前缀状态图标容器 */
+.status-sel-icon { display: inline-flex; align-items: center; justify-content: center; width: 16px; }
+.status-sel-icon .si-fixing,
+.status-sel-icon .si-done { width: 15px; height: 15px; }
+
+/* 待修复：暖灰色胶囊 + 平静呼吸点（柔和光环涟漪，中性、安慰感） */
 .status-select-status-pending .el-select__selected-item {
-  color: var(--danger) !important;
-  font-weight: 600;
+  color: #8A8577 !important;
+  background: rgba(138, 133, 119, 0.14);
+}
+.status-select-status-pending .status-sel-icon { color: #8A8577; }
+.si-pending-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #8A8577;
+  animation: calmBreathe 2.4s ease-in-out infinite;
+}
+@keyframes calmBreathe {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(138, 133, 119, 0.35); }
+  50% { box-shadow: 0 0 0 5px rgba(138, 133, 119, 0); }
 }
 
-/* 修复中 */
+/* 修复中：科技蓝胶囊 + 扳手拧螺栓（棘轮式步进旋转，"咔哒咔哒"） */
 .status-select-status-fixing .el-select__selected-item {
-  color: var(--warn) !important;
-  font-weight: 600;
+  color: #409EFF !important;
+  background: rgba(64, 158, 255, 0.12);
+}
+.status-select-status-fixing .status-sel-icon { color: #409EFF; }
+.si-bolt {
+  transform-origin: 12px 12px; /* SVG viewBox 用户单位原点（默认 view-box，兼容性好） */
+  animation: boltRatchet 1.1s steps(6) infinite;
+}
+@keyframes boltRatchet {
+  to { transform: rotate(360deg); }
 }
 
-/* 已完成 */
+/* 已完成：绿色胶囊（文字深绿）+ 电池 + 黄色闪电（偶尔"滋滋"冒一下） */
 .status-select-status-done .el-select__selected-item {
-  color: var(--ok) !important;
-  font-weight: 600;
+  color: #2E9E6B !important;
+  background: rgba(76, 183, 130, 0.13);
+}
+.status-select-status-done .status-sel-icon { color: #2E9E6B; }
+.si-boltflash {
+  transform-origin: 11.6px 13.2px;
+  animation: chargeFlicker 2.2s ease-in-out infinite;
+}
+@keyframes chargeFlicker {
+  0%, 72%, 100% { opacity: .72; transform: scale(1); }
+  76%, 86% { opacity: 1; transform: scale(1.32); }
+  80% { opacity: .5; }
+}
+.si-spark {
+  opacity: 0;
+  transform-origin: 21.2px 5.4px;
+  animation: sparkPop 2.2s ease-in-out infinite;
+}
+@keyframes sparkPop {
+  0%, 74%, 100% { opacity: 0; transform: scale(.3); }
+  78% { opacity: 1; transform: scale(1.45); }
+  88% { opacity: 0; transform: scale(.5); }
 }
 
 /* 状态下拉选项 */
@@ -691,9 +768,9 @@ body {
   flex-shrink: 0;
 }
 
-.status-tag-dot.status-pending { background-color: var(--danger); }
-.status-tag-dot.status-fixing { background-color: var(--warn); }
-.status-tag-dot.status-done { background-color: var(--ok); }
+.status-tag-dot.status-pending { background-color: #8A8577; }
+.status-tag-dot.status-fixing { background-color: #409EFF; }
+.status-tag-dot.status-done { background-color: #2E9E6B; }
 
 /* ============================================================
    输入框
@@ -1334,6 +1411,27 @@ body {
   transform: scale(0.97);
 }
 
+.note-cancel-btn {
+  padding: 5px 16px;
+  font-size: 0.8rem;
+  color: var(--text-2);
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  line-height: 1.6;
+  font-weight: 500;
+  transition: all var(--transition-fast);
+  font-family: inherit;
+}
+.note-cancel-btn:hover {
+  background: rgba(0, 0, 0, 0.05);
+  color: var(--text);
+}
+.note-cancel-btn:active {
+  transform: scale(0.97);
+}
+
 .note-new-actions {
   display: flex;
   align-items: center;
@@ -1345,6 +1443,21 @@ body {
 .note-hint {
   font-size: 0.75rem;
   color: var(--text-2);
+}
+
+/* "已修改"标记（飞书式：时间刷新 + 括号注明） */
+.note-edited {
+  font-size: 0.7rem;
+  color: var(--text-2);
+  margin-left: 4px;
+  font-style: normal;
+}
+
+/* 备注编辑框展开动画（纯 CSS 挂载动画：挂载即从透明淡入，无 Vue 过渡的闪现/共存问题） */
+.note-edit-in { animation: noteEditIn .2s ease; }
+@keyframes noteEditIn {
+  from { opacity: 0; transform: translateY(-5px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 
 /* textarea */
@@ -1483,10 +1596,6 @@ body {
 /* ============================================================
    关键帧动画
    ============================================================ */
-@keyframes fadeIn {
-  from { opacity: 0; transform: translateY(10px); }
-  to   { opacity: 1; transform: translateY(0); }
-}
 
 /* ============================================================
    滚动条（浅色）
@@ -1538,14 +1647,17 @@ body {
     justify-content: space-between;
   }
 
-  .toolbar-actions {
-    flex-wrap: wrap;
-    gap: 8px;
-  }
-
   .filter-buttons {
     gap: 6px;
   }
+
+  /* 窄窗：新增项目 / 新增任务 同时收成纯图标按钮 */
+  .btn-add-project .btn-label,
+  .btn-add-task .btn-label { display: none; }
+  .btn-add-project,
+  .btn-add-task { padding: 8px !important; }
+  .btn-add-project .icon,
+  .btn-add-task .icon { margin-right: 0; }
 
   .status-select {
     width: 92px;
@@ -1556,10 +1668,6 @@ body {
   .bug-list .bug-row { gap: 8px; }
   .bug-list .bug-name { min-width: 0; }
   .bug-list .bug-status { width: 92px; }
-  .bug-list .bug-shots { width: 96px; }
-  .bug-list .img-stack{width:96px}   /* 窄窗：牌堆缩至 3 张可见（配合模板 slice(0, isWideWindow ? 4 : 3)），(0,2,0) 特异性压过基础 .img-stack */
-  .bug-list .bug-notes { width: 40px; }
-  .bug-list .bug-actions { width: 80px; }
 
   .client-count {
     display: none;
@@ -1583,17 +1691,14 @@ body {
   .app-title {
     font-size: 1rem;
   }
-
-  .bug-count {
-    display: none;
-  }
 }
 
 /* ============================================================
    打印样式
    ============================================================ */
 @media print {
-  .toolbar,
+  .search-bar,
+  .list-head,
   .app-footer {
     display: none !important;
   }
@@ -1637,8 +1742,8 @@ body {
 .note-image-actions { display: inline-flex; align-items: center; }
 .note-image-add { display: inline-flex; align-items: center; margin: 2px 0 4px; }
 
-/* 备注多图：mini 牌堆（复用 .img-stack 视觉，缩小版：卡片 44×60、偏移 [2,16,30]） */
-.note-stack{position:relative;width:88px;height:60px;cursor:pointer}
+/* 备注多图：mini 牌堆（复用 .img-stack 视觉，缩小版：卡片 44×60、偏移 [2,12,24,36,48,60]，最多 6 张） */
+.note-stack{position:relative;width:110px;height:60px;cursor:pointer}
 .note-stack-card{position:absolute;top:0;left:0;width:44px;height:60px;border-radius:6px;overflow:hidden;border:1px solid rgba(42,39,35,.18);box-shadow:0 2px 6px rgba(42,39,35,.16);background:var(--surface-hi);cursor:pointer}
 .note-stack-card img{width:100%;height:100%;object-fit:cover;display:block}
 .note-stack-del{position:absolute;top:2px;right:2px;width:16px;height:16px;line-height:14px;text-align:center;border-radius:50%;background:rgba(28,26,23,.62);color:#fff;font-size:11px;cursor:pointer;z-index:6}
@@ -1651,35 +1756,40 @@ body {
 /* ============================================================
    任务列表（自定义行，替代 el-table）
    ============================================================ */
-.bug-list{display:flex;flex-direction:column;gap:7px;min-height:0;padding-bottom:12px}
-.bug-row{display:flex;align-items:center;gap:12px;background:var(--surface);border:1px solid var(--line-soft);border-radius:11px;padding:9px 12px;min-height:44px;transition:height .32s cubic-bezier(.3,.9,.35,1), opacity .2s ease, box-shadow .2s ease}
-.bug-row:hover{background:var(--surface-hi)}
+.bug-list{min-height:0;padding:12px 16px 16px}
+/* 行列表（TransitionGroup 渲染容器）：flex 列布局；移动/飞出动画由 JS 手动驱动（内联样式） */
+.bug-rows{display:flex;flex-direction:column;gap:7px;position:relative}
+/* 计数徽标闪烁（状态移动完成后的反馈涟漪） */
+.filter-flash{animation:countFlash .7s ease}
+@keyframes countFlash{0%{box-shadow:0 0 0 0 rgba(94,106,210,.5)}70%{box-shadow:0 0 0 9px rgba(94,106,210,0)}100%{box-shadow:0 0 0 0 rgba(94,106,210,0)}}
+.bug-row{display:flex;align-items:center;gap:10px;background:var(--surface);border:1px solid var(--line-soft);border-radius:11px;padding:9px 12px;min-height:44px;box-shadow:var(--shadow-card);transition:height .32s cubic-bezier(.3,.9,.35,1), opacity .2s ease, box-shadow .2s ease}
+.bug-row:hover{background:var(--surface-hi);box-shadow:var(--shadow-hover)}
 .bug-name{flex:1;min-width:180px}
-.bug-status{width:110px;flex:none}
-.bug-shots{width:132px;flex:none;display:flex;align-items:center;gap:6px;position:relative}
+.bug-status{width:120px;flex:none}
+.bug-shots{flex:none;display:flex;align-items:center;gap:6px;position:relative}
 .bug-shots.drag-over{outline:2px dashed var(--primary);outline-offset:-2px;border-radius:8px}
-.bug-notes{width:56px;flex:none}
-.bug-actions{width:96px;flex:none;display:flex;justify-content:flex-end;position:relative}
+.bug-notes{flex:none}
+.bug-actions{flex:none;display:flex;justify-content:flex-end;position:relative}
 .bug-list-wide .bug-status{width:130px}
-.bug-list-wide .bug-shots{width:150px}
 .img-stack{position:relative;width:116px;height:66px}
 .img-stack-card{position:absolute;top:2px;left:0;width:52px;height:62px;border-radius:8px;overflow:hidden;border:1px solid rgba(42,39,35,.18);box-shadow:0 2px 6px rgba(42,39,35,.16);background:var(--surface-hi);transition:transform .26s cubic-bezier(.3,1.7,.45,1), box-shadow .2s ease;cursor:pointer}
 .img-stack-card img{width:100%;height:100%;object-fit:cover;display:block}
-/* hover 用 !important 覆盖内联 :style 的 transform（内联样式优先级高于类，不 !important 则抽卡失效）；z-index 同需 !important 压过内联 zIndex(4/3/2/1)，保证抽起的牌位于所有邻牌之上 */
+/* hover 用 !important 覆盖内联 :style 的 transform（内联样式优先级高于类，不 !important 则抽卡失效）；z-index 同需 !important 压过内联 zIndex(6..1)，保证抽起的牌位于所有邻牌之上 */
 .img-stack-card:hover{transform:translateY(-9px) rotate(0deg) scale(1.05) !important;z-index:20 !important;box-shadow:0 12px 22px rgba(42,39,35,.3)}
 .img-stack-card.card-drop{animation:cardDrop .42s cubic-bezier(.3,1.4,.5,1)}
 .img-stack-count{position:absolute;right:-2px;bottom:-2px;background:var(--primary);color:var(--text-inverse);border-radius:999px;font-size:10px;padding:2px 7px;z-index:21}
 @keyframes cardDrop{0%{transform:translateY(-46px) scale(.85);opacity:0}60%{opacity:1}100%{transform:translateY(0) scale(1)}}
-.shot-add{width:52px;height:62px;border:1px dashed var(--line);border-radius:8px;background:transparent;color:var(--text-2);cursor:pointer;display:inline-flex;align-items:center;justify-content:center}
-.shot-add .icon{width:18px;height:18px}
+.shot-add{width:32px;height:32px;border:1px dashed var(--line);border-radius:9px;background:var(--surface-hi);color:var(--text-2);cursor:pointer;display:inline-flex;align-items:center;justify-content:center;flex:none;box-shadow:0 1px 2px rgba(0,0,0,.05), 0 1px 3px rgba(0,0,0,.06)}
+.shot-add .icon{width:15px;height:15px}
 .shot-add-more{position:absolute;right:-2px;bottom:-2px;background:var(--primary);color:var(--text-inverse);border:none;border-radius:999px;font-size:12px;padding:2px 8px;cursor:pointer}
-.bug-row-spotlight{position:relative;z-index:66;border-radius:10px;box-shadow:0 0 0 4px rgba(255,255,255,.65), 0 4px 18px rgba(42,39,35,.28)}
-.bug-row-dying{animation:rowRedFlash .16s ease;overflow:hidden}
-.bug-row-covering{position:relative;z-index:5;box-shadow:0 -8px 14px rgba(42,39,35,.16)}
+.bug-row-spotlight{position:relative;z-index:1700;border-radius:10px;box-shadow:0 0 0 4px rgba(255,255,255,.65), 0 4px 18px rgba(42,39,35,.28)}
+/* 删除收起：行高/内边距/边框同步过渡到 0，margin-bottom 抵消 .bug-list 的 gap:7px，下方行自然平滑上移覆盖，移除时零跳变 */
+.bug-row-dying{overflow:hidden;height:0 !important;min-height:0 !important;padding-top:0 !important;padding-bottom:0 !important;border-top-width:0 !important;border-bottom-width:0 !important;margin-bottom:-7px !important;transition:height .28s cubic-bezier(.3,.9,.35,1), min-height .28s cubic-bezier(.3,.9,.35,1), padding-top .28s cubic-bezier(.3,.9,.35,1), padding-bottom .28s cubic-bezier(.3,.9,.35,1), border-top-width .28s cubic-bezier(.3,.9,.35,1), border-bottom-width .28s cubic-bezier(.3,.9,.35,1), margin-bottom .28s cubic-bezier(.3,.9,.35,1)}
+/* 删除渐隐（仅剩一行时）：直接淡出，不收起 */
+.bug-row-fade{opacity:0 !important;transition:opacity .2s ease !important}
 .row-enter{animation:rowGrow .3s cubic-bezier(.3,1.2,.4,1)}
-@keyframes rowRedFlash{0%{background:rgba(229,72,77,0)}30%{background:rgba(229,72,77,.14)}100%{background:rgba(229,72,77,0)}}
 @keyframes rowGrow{from{max-height:0;opacity:0;transform:translateY(-4px)}to{max-height:120px;opacity:1;transform:translateY(0)}}
-.btn-note{display:inline-flex;align-items:center;gap:4px;background:var(--surface);color:var(--text);border:1px solid var(--line);border-radius:10px;padding:7px 10px;font-size:12px;cursor:pointer}
+.btn-note{display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;background:var(--surface-hi);color:var(--text);border:1px solid var(--line);border-radius:9px;padding:0;font-size:0;cursor:pointer;box-shadow:0 1px 2px rgba(0,0,0,.05), 0 1px 3px rgba(0,0,0,.06);position:relative} /* position:relative 让备注标识锚定在按钮右上角 */
 
 /* ============================================================
    截图查看器（扑克牌堆展开/缩回）
@@ -1707,13 +1817,36 @@ body {
 .pv-x:hover{background:rgba(255,255,255,.32);transform:rotate(90deg)}
 /* 页码提示 */
 .pv-tip{position:absolute;bottom:12px;left:50%;transform:translateX(-50%);color:#fff;background:rgba(0,0,0,.5);border-radius:999px;padding:4px 14px;font-size:12px}
+/* 查看器右下角删除钮（仅牌堆预览显示） */
+.pv-del{position:absolute;bottom:12px;right:12px;width:38px;height:38px;border-radius:50%;background:rgba(229,72,77,.88);color:#fff;border:none;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:all .18s ease;z-index:5}
+.pv-del .icon{width:17px;height:17px}
+.pv-del:hover{background:#e5484d;transform:scale(1.06)}
+/* ElMessage 提示必须浮在查看器黑幕（2101）之上，否则查看器内删除成功后提示被遮住看不清 */
+.el-message{z-index:2200 !important}
+/* 查看器内删除确认（居中浮层，盖住舞台其余控件） */
+.pv-confirm{position:absolute;inset:0;z-index:10;display:flex;align-items:center;justify-content:center;background:rgba(28,26,23,.5)}
+/* 确认框渐隐入场/退场（与删除成功提示的入场/退场节奏一致） */
+.pv-confirm-enter-active,.pv-confirm-leave-active{transition:opacity .18s ease}
+.pv-confirm-enter-active .pv-confirm-box{transition:transform .18s cubic-bezier(.3,1.2,.4,1)}
+.pv-confirm-leave-active .pv-confirm-box{transition:transform .14s ease}
+.pv-confirm-enter-from,.pv-confirm-leave-to{opacity:0}
+.pv-confirm-enter-from .pv-confirm-box{transform:scale(.92)}
+.pv-confirm-leave-to .pv-confirm-box{transform:scale(.92)}
+.pv-confirm-box{background:#fff;border-radius:14px;padding:22px 26px;box-shadow:0 16px 50px rgba(0,0,0,.45);text-align:center;min-width:230px}
+.pv-confirm-title{margin:0 0 16px;font-size:15px;font-weight:600;color:#2A2723}
+.pv-confirm-btns{display:flex;justify-content:center;gap:10px}
+.pv-confirm-btns button{border:none;border-radius:8px;padding:8px 18px;font-size:13px;cursor:pointer;transition:all .15s ease}
+.pv-confirm-btns .no{background:rgba(0,0,0,.06);color:#5a5550}
+.pv-confirm-btns .no:hover{background:rgba(0,0,0,.1)}
+.pv-confirm-btns .ok{background:var(--danger);color:#fff}
+.pv-confirm-btns .ok:hover{filter:brightness(1.08)}
 
 /* ============================================================
    删除全链路（蓄怒 / 释放 / 气泡 / 幕布）
    行状态类 bug-row-spotlight / dying / covering / row-enter 在任务列表节已定义
-   层级链：幕布 65 < 行聚光 66 < 气泡 70
+   层级链：吸顶区 1000 < 小火箭 1500 < 幕布 1600 < 行聚光 1700 < 气泡 1800
    ============================================================ */
-.btn-del{border:1px solid #EDC9C4;background:var(--surface-hi);color:var(--danger);border-radius:9px;padding:7px 12px;font-size:13px;cursor:pointer;display:inline-flex;align-items:center;gap:5px;transition:transform .24s cubic-bezier(.3,1.4,.5,1), box-shadow .24s ease, background .18s ease;position:relative}
+.btn-del{border:1px solid #EDC9C4;background:var(--surface-hi);color:var(--danger);border-radius:9px;width:32px;height:32px;padding:0;font-size:0;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;transition:transform .24s cubic-bezier(.3,1.4,.5,1), box-shadow .24s ease, background .18s ease;position:relative}
 .btn-del .icon{width:14px;height:14px}
 .btn-del:hover{transform:translateY(-1px) skewX(-1deg);box-shadow:0 3px 10px rgba(229,72,77,.25), 0 0 0 3px rgba(229,72,77,.08);background:#FEF7F6}
 .btn-del:active{transition-duration:.09s;transform:scale(.97) skewX(1deg);animation:delShakeHold .16s linear infinite;box-shadow:inset 0 0 10px rgba(229,72,77,.28), 0 0 0 4px rgba(229,72,77,.12)}
@@ -1725,31 +1858,39 @@ body {
 @keyframes delShakeAngry{0%{transform:scale(.97) translate(0,0) rotate(0)}20%{transform:scale(.97) translate(1.3px,-1.1px) rotate(-1.3deg)}40%{transform:scale(.97) translate(-1.5px,1px) rotate(1.3deg)}60%{transform:scale(.97) translate(1.2px,.9px) rotate(-1deg)}80%{transform:scale(.97) translate(-1px,-.9px) rotate(1deg)}100%{transform:scale(.97) translate(0,0) rotate(0)}}
 @keyframes delShakeBurst{0%{transform:translate(0,0) rotate(0)}15%{transform:translate(-2.4px,1.2px) rotate(-1.6deg)}30%{transform:translate(2.2px,-1px) rotate(1.4deg)}45%{transform:translate(-1.8px,-.8px) rotate(-1.1deg)}60%{transform:translate(1.4px,.8px) rotate(.8deg)}75%{transform:translate(-.8px,0) rotate(-.4deg)}100%{transform:translate(0,0) rotate(0)}}
 @keyframes delRing{0%{opacity:.9;transform:scale(.9)}100%{opacity:0;transform:scale(1.35)}}
-.del-confirm{display:inline-flex;align-items:center;gap:8px;background:var(--surface-hi);border:1px solid var(--line);border-radius:10px;padding:6px 9px;box-shadow:0 6px 18px rgba(42,39,35,.16);font-size:12px;color:var(--text);opacity:0;visibility:hidden;transform:translateY(4px) scale(.96);transition:all .2s cubic-bezier(.3,1.4,.5,1);pointer-events:none;position:absolute;right:0;top:calc(100% + 6px);z-index:70;white-space:nowrap}
+.del-confirm{display:inline-flex;align-items:center;gap:8px;background:var(--surface-hi);border:1px solid var(--line);border-radius:10px;padding:6px 9px;box-shadow:0 6px 18px rgba(42,39,35,.16);font-size:12px;color:var(--text);opacity:0;visibility:hidden;transform:translateY(4px) scale(.96);transition:all .2s cubic-bezier(.3,1.4,.5,1);pointer-events:none;position:absolute;right:0;top:calc(100% + 6px);z-index:1800;white-space:nowrap}
 .del-confirm.show{opacity:1;visibility:visible;transform:translateY(0) scale(1);pointer-events:auto}
 .del-confirm .ok{background:var(--danger);color:#fff;border:none;border-radius:7px;padding:4px 12px;font-size:12px;cursor:pointer}
 .del-confirm .no{background:transparent;border:1px solid var(--line);color:var(--text-2);border-radius:7px;padding:4px 12px;font-size:12px;cursor:pointer}
-.del-scrim{position:fixed;inset:0;z-index:65;pointer-events:none;background:rgba(28,26,23,.5);opacity:0;transition:opacity .24s ease}
+.del-scrim{position:fixed;inset:0;z-index:1600;pointer-events:none;background:rgba(28,26,23,.5);opacity:0;transition:opacity .24s ease}
 .del-scrim.show{opacity:1;pointer-events:auto}
 
 /* ============================================================
    Task 6：按钮四态与结果动画（新增垒上 / 上传托举发射 / 备注便签翘角）
    ============================================================ */
 
-/* ---- 新增任务按钮（垒上）：工具栏 btn-add ---- */
-.btn-add{display:inline-flex;align-items:center;gap:6px;background:var(--primary);color:var(--text-inverse);border:none;border-radius:10px;padding:9px 18px;font-size:13px;cursor:pointer;box-shadow:0 1px 3px rgba(94,106,210,.35);transition:transform .24s cubic-bezier(.3,1.4,.5,1), box-shadow .22s ease}
-.btn-add:hover{transform:translateY(-3px);box-shadow:0 10px 20px rgba(94,106,210,.35)}
-.btn-add:active{transition-duration:.09s;transform:translateY(2px);box-shadow:0 1px 2px rgba(94,106,210,.28)}
-.btn-add:active .icon{transform:rotate(90deg)}
-.btn-add .icon{transition:transform .22s cubic-bezier(.3,1.4,.5,1)}
-.btn-add.land{animation:addLand .34s cubic-bezier(.3,1.3,.5,1)}
+/* ---- 新增任务按钮（垒上）：列表头 btn-add-task，胶囊包边 + 浅蓝底，悬停变实心蓝 ---- */
+.btn-add-task {
+  border-radius: var(--radius-pill);
+  --el-button-bg-color: rgba(94,106,210,.08);
+  --el-button-border-color: var(--line);
+  --el-button-text-color: var(--text);
+  --el-button-hover-bg-color: var(--primary);
+  --el-button-hover-border-color: var(--primary);
+  --el-button-hover-text-color: var(--text-inverse);
+  --el-button-active-bg-color: #4A56C2;
+  --el-button-active-border-color: #4A56C2;
+  --el-button-active-text-color: var(--text-inverse);
+  transition: transform .24s cubic-bezier(.3,1.4,.5,1), box-shadow .22s ease, background-color .2s ease, border-color .2s ease, color .2s ease;
+}
+.btn-add-task:hover { transform: translateY(-1px); box-shadow: 0 4px 12px rgba(94,106,210,.3); }
+.btn-add-task .icon { width: 15px; height: 15px; margin-right: 5px; transition: transform .22s cubic-bezier(.3,1.4,.5,1); }
+.btn-add-task:active .icon { transform: rotate(90deg); }
+.btn-add-task.land { animation: addLand .34s cubic-bezier(.3,1.3,.5,1); }
 @keyframes addLand{0%{transform:translateY(2px)}45%{transform:translateY(-1.5px)}100%{transform:translateY(0)}}
-/* 小尺寸变体（任务标签栏"＋"，复用 btn-add）：内容自适应 + hover 保持主色填充（压过 .new-task-btn:hover 的浅色化） */
-.btn-add-sm{width:auto;height:auto;padding:6px 10px;font-size:12px;border-radius:8px}
-.btn-add-sm:hover{background:var(--primary);color:var(--text-inverse)}
 
 /* ---- 上传按钮（托举发射）：shot-add / shot-add-more / 截图菜单 / 粘贴对话框 / 备注弹窗 统一入口 ---- */
-.btn-upload{display:inline-flex;align-items:center;gap:6px;background:var(--surface);color:var(--text);border:1px solid var(--line);border-radius:10px;padding:8px 14px;font-size:13px;cursor:pointer;transition:transform .24s cubic-bezier(.3,1.4,.5,1), box-shadow .22s ease}
+.btn-upload{display:inline-flex;align-items:center;gap:6px;background:var(--surface-hi);color:var(--text);border:1px solid var(--line);border-radius:10px;padding:8px 14px;font-size:13px;cursor:pointer;box-shadow:0 1px 2px rgba(0,0,0,.05), 0 1px 3px rgba(0,0,0,.06);transition:transform .24s cubic-bezier(.3,1.4,.5,1), box-shadow .22s ease}
 .btn-upload .icon{transition:transform .18s ease}
 .btn-upload:hover{transform:translateY(-2px);box-shadow:0 6px 14px rgba(42,39,35,.15)}
 .btn-upload:hover .icon{transform:translateY(-1.5px)}
@@ -1769,6 +1910,122 @@ body {
 
 /* ---- 备注弹窗便签外观 ---- */
 .sheet-dialog{background:var(--surface-hi);border-radius:14px;box-shadow:0 16px 60px rgba(42,39,35,.25)}
+
+/* ============================================================
+   主题切换（10 套成品主题，仅本机生效）
+   ============================================================ */
+.theme-box{display:inline-flex}
+.theme-btn{width:32px;height:32px;border:1px solid var(--line);background:var(--surface-hi);color:var(--text);border-radius:9px;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;box-shadow:0 1px 2px rgba(0,0,0,.05), 0 1px 3px rgba(0,0,0,.06);transition:transform .24s cubic-bezier(.3,1.4,.5,1), box-shadow .22s ease}
+.theme-btn .icon{width:15px;height:15px}
+.theme-btn:hover{transform:translateY(-2px);box-shadow:var(--shadow-hover)}
+.theme-btn:active{transform:translateY(1px) scale(.97)}
+/* fixed 定位：移出头部（overflow:hidden + backdrop-filter 会裁剪/困住内部弹层），坐标由 JS 计算 */
+.theme-popover{position:fixed;z-index:2000;width:230px;max-height:70vh;overflow-y:auto;background:var(--surface-hi);border:1px solid var(--line);border-radius:12px;box-shadow:var(--shadow-dialog);padding:8px}
+.theme-popover-title{font-size:12px;color:var(--text-2);padding:2px 8px 8px}
+.theme-empty{font-size:12.5px;color:var(--text-2);padding:12px 8px;text-align:center;line-height:1.6}
+.theme-item{display:flex;align-items:center;gap:8px;padding:7px 8px;border-radius:8px;cursor:pointer;font-size:13px;color:var(--text);transition:background .15s ease}
+.theme-item:hover{background:rgba(0,0,0,.05)}
+.theme-item.active{background:rgba(94,106,210,.12);color:var(--primary)}
+.theme-swatch{display:flex;gap:3px;flex:none}
+.theme-swatch .dot{width:12px;height:12px;border-radius:50%;border:1px solid rgba(0,0,0,.14)}
+.theme-name{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.theme-check{color:var(--primary);font-weight:700}
+.theme-menu-backdrop{position:fixed;inset:0;z-index:79}
+
+/* ============================================================
+   小火箭（右侧常驻）：hover 点火预热，点击发射回顶
+   ============================================================ */
+.rocket-btn {
+  position: fixed;
+  right: 20px;
+  bottom: 20px;
+  width: 46px;
+  height: 46px;
+  border-radius: 50%;
+  border: none;
+  background: var(--primary);
+  color: var(--text-inverse);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 6px 16px rgba(94,106,210,.4);
+  z-index: 1500; /* 高于吸顶区(1000)与动画行(999)，低于查看器(2101)/弹层(2000) */
+  transition: transform .24s cubic-bezier(.3,1.4,.5,1), box-shadow .22s ease;
+}
+.rocket-btn .icon { width: 22px; height: 22px; }
+.rocket-btn .rocket-body { display: inline-flex; transition: transform .25s cubic-bezier(.3,1.4,.5,1); }
+
+/* 尾焰：默认隐藏，hover 点燃（小火苗闪烁），发射时拉成长尾 */
+.rocket-flame {
+  position: absolute;
+  bottom: 5px;
+  left: 50%;
+  transform: translateX(-50%) scale(0);
+  width: 13px;
+  height: 13px;
+  opacity: 0;
+  transform-origin: 50% 100%;
+  transition: transform .18s ease, opacity .18s ease;
+  pointer-events: none;
+}
+.rocket-btn:hover .rocket-flame {
+  opacity: 1;
+  transform: translateX(-50%) scale(1);
+  animation: flameFlicker .16s ease-in-out infinite alternate;
+}
+@keyframes flameFlicker {
+  0% { transform: translateX(-50%) scale(1, .9); }
+  100% { transform: translateX(-50%) scale(1, 1.15); }
+}
+
+/* hover：点火震动 + 上浮欲飞 */
+.rocket-btn:hover .rocket-body {
+  transform: translateY(-2px) rotate(-4deg);
+  animation: rocketWiggle .28s ease-in-out infinite alternate;
+}
+@keyframes rocketWiggle {
+  from { transform: translateY(-2px) rotate(-4deg); }
+  to { transform: translateY(-3px) rotate(3deg); }
+}
+
+/* 点击发射：按钮下沉蓄力 → 火箭蹿升消失 + 尾焰拉长 + 冲击环 */
+.rocket-btn.launching { animation: btnKick .3s ease-out; }
+@keyframes btnKick {
+  0% { transform: scale(1); }
+  40% { transform: scale(.88) translateY(3px); }
+  100% { transform: scale(1); }
+}
+.rocket-btn.launching .rocket-body {
+  animation: rocketLaunch .95s cubic-bezier(.3,.9,.2,1) forwards;
+}
+@keyframes rocketLaunch {
+  0% { transform: translateY(0) rotate(0) scale(1); }
+  25% { transform: translateY(-12px) rotate(-6deg) scale(1.06); }
+  100% { transform: translateY(-64px) rotate(12deg) scale(.45); opacity: 0; }
+}
+.rocket-btn.launching .rocket-flame {
+  opacity: 1;
+  transform: translateX(-50%) scale(1);
+  animation: flameTail .95s ease-out forwards;
+}
+@keyframes flameTail {
+  0% { opacity: 1; transform: translateX(-50%) scale(1); }
+  55% { opacity: 1; transform: translateX(-50%) scaleY(3.4); }
+  100% { opacity: 0; transform: translateX(-50%) scaleY(5); }
+}
+.rocket-btn.launching::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 184, 77, .75);
+  animation: launchRing .7s ease-out forwards;
+}
+@keyframes launchRing {
+  from { transform: scale(.5); opacity: 1; }
+  to { transform: scale(2.6); opacity: 0; }
+}
 
 /* ============================================================
    Task 9a：prefers-reduced-motion 支持（系统开启"减少动态效果"时，动画/过渡立即完成）
