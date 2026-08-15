@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>任务清单</title>
-  <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+  <link rel="icon" href="/favicon.ico" type="image/x-icon" />
   <!-- Google Fonts -->
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -217,8 +217,10 @@
             <span v-else class="name-text" :class="{ 'name-placeholder': !bug.name }">{{ bug.name || '双击编辑名称...' }}</span>
           </div>
           <div class="bug-cell bug-shots" @dragover="onDragOver" @dragleave="onDragLeave" @drop="onDrop($event, bug.id)">
-            <!-- 扑克牌堆：最多叠放 6 张，第 1 张最上层，hover 抽卡 -->
-            <div class="img-stack" v-if="(bug.images||[]).length">
+            <!-- 再次添加：牌堆左侧独立"＋"按钮（简约，无数量徽标——缩略图本就看不全，数量无意义） -->
+            <button v-if="(bug.images||[]).length" class="shot-add-more" @click.stop="triggerImageMenu($event, bug.id)" aria-label="再次添加截图">＋</button>
+            <!-- 扑克牌堆：最多叠放 6 张，第 1 张最上层，hover 抽卡；宽度按图片数自适应（右缘对齐最后一张卡片） -->
+            <div class="img-stack" v-if="(bug.images||[]).length" :style="stackWrapStyle((bug.images||[]).length)">
               <div
                 v-for="(img, i) in (bug.images||[]).slice(0, 6)"
                 :key="img"
@@ -227,33 +229,28 @@
                 :style="stackCardStyle(i)"
                 @click.stop="openPreview(bug, img, $event)"
               ><img :src="'//' + serverHost + '/uploads/' + encodeURIComponent(img)" alt="截图" loading="lazy" decoding="async" /></div>
-              <span class="img-stack-count">{{ (bug.images||[]).length }} 张</span>
             </div>
             <button v-else class="shot-add btn-upload" @click.stop="triggerImageMenu($event, bug.id)" aria-label="上传截图">
               <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2.5"/><circle cx="8.6" cy="9.6" r="1.3"/><path d="M21 15.5l-4.8-4.8-4 4.1-3.2-3-6 5.2"/></svg>
             </button>
-            <button v-if="(bug.images||[]).length" class="shot-add-more btn-upload" @click.stop="triggerImageMenu($event, bug.id)" aria-label="添加截图">＋</button>
           </div>
           <div class="bug-cell bug-status">
             <el-select :model-value="bug.status" @update:model-value="onStatusChange(bug, $event)" size="small"
               :class="['status-select', 'status-select-' + getStatusClass(bug.status)]">
-              <!-- 前缀状态图标：修复中=扳手拧螺栓（棘轮步进），已完成=电池充电（偶尔滋滋），待修复=平静呼吸点 -->
+              <!-- 前缀状态图标（圆环体系·抽象非实物）：待修复=空心圆环，修复中=缺口弧+端点，已完成=圆环+对勾；静默常态，仅状态变化瞬间播一次动效 -->
               <template #prefix>
                 <span class="status-sel-icon" :class="getStatusClass(bug.status)">
-                  <svg v-if="bug.status === '修复中'" class="si-fixing" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-                    <g class="si-bolt">
-                      <path d="M12 6.9l4.5 2.6v5.2L12 17.3l-4.5-2.6V9.5z"/>
-                    </g>
-                    <path d="M15.6 14.9c1.3 1.3 1.3 3.5 0 4.8" />
-                    <path d="M15.6 17.3l6 6" stroke-width="2.2" stroke-linecap="round"/>
+                  <svg v-if="bug.status === '待修复'" class="si-pending" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="12" cy="12" r="8.6"/>
                   </svg>
-                  <svg v-else-if="bug.status === '已完成'" class="si-done" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-                    <rect x="3" y="8.5" width="15" height="8" rx="2"/>
-                    <path d="M20.5 10.8v3.4"/>
-                    <path class="si-boltflash" d="M11.4 9.6l-2.9 4.4h2.7l-.9 2.8 3.6-4.9h-2.6l1.2-2.3z" fill="#FFC53D" stroke="none"/>
-                    <path class="si-spark" d="M21.2 4.6l.6 1.3 1.3.6-1.3.6-.6 1.3-.6-1.3-1.3-.6 1.3-.6z" fill="#FFC53D" stroke="none"/>
+                  <svg v-else-if="bug.status === '修复中'" class="si-fixing" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M20.4 12a8.4 8.4 0 1 1-2.5-6"/>
+                    <circle cx="20.4" cy="12" r="1.7" fill="currentColor" stroke="none"/>
                   </svg>
-                  <span v-else class="si-pending-dot"></span>
+                  <svg v-else class="si-done" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="12" cy="12" r="8.6"/>
+                    <path class="si-tick" d="M8.2 12.4l2.6 2.6 5-5.4"/>
+                  </svg>
                 </span>
               </template>
               <el-option v-for="opt in statusOptions" :key="opt" :label="opt" :value="opt">
@@ -491,28 +488,24 @@
           <span class="theme-name">导入数据（JSON）</span>
         </div>
       </div>
-      <div v-if="moreMenuVisible" class="theme-menu-backdrop" @click="moreMenuVisible = false"></div>
+      <div v-if="moreMenuVisible" class="theme-menu-backdrop" @click="closeMoreMenu"></div>
       <!-- 主题选择面板（fixed 定位，移出头部避免 overflow:hidden 裁剪与毛玻璃层叠上下文） -->
       <div
         v-show="themeMenuVisible"
         class="theme-popover"
+        :class="{leaving: themeMenuLeaving}"
         :style="{ left: themeMenuX + 'px', top: themeMenuY + 'px' }"
         @click.stop
       >
-        <div class="theme-popover-title">选择主题（仅本机生效）</div>
+        <div class="theme-popover-title">选择主题</div>
         <div v-if="!themes.length" class="theme-empty">主题配色方案待定，敬请期待</div>
-        <div class="theme-item" v-for="t in themes" :key="t.id" :class="{active: themeId === t.id}" @click="applyTheme(t.id); themeMenuVisible = false">
-          <span class="theme-swatch">
-            <span class="dot" :style="{background: t.vars.bg}"></span>
-            <span class="dot" :style="{background: t.vars.surface}"></span>
-            <span class="dot" :style="{background: t.vars.primary}"></span>
-          </span>
+        <div class="theme-item" v-for="t in themes" :key="t.id" :class="{active: themeId === t.id}" @click="applyThemeRebuild(t.id)">
           <span class="theme-name">{{ t.name }}</span>
           <span class="theme-check" v-if="themeId === t.id">✓</span>
         </div>
       </div>
-      <!-- 点击空白关闭主题面板 -->
-      <div v-if="themeMenuVisible" class="theme-menu-backdrop" @click="themeMenuVisible = false"></div>
+      <!-- 点击空白渐隐关闭主题面板 -->
+      <div v-if="themeMenuVisible" class="theme-menu-backdrop" @click="closeThemeMenu"></div>
       <!-- 点击空白关闭气泡 -->
       <div v-if="imageMenuVisible" class="image-menu-backdrop" @click="imageMenuVisible = false"></div>
 
@@ -545,13 +538,13 @@
         <span :title="backupStatus"><svg class="icon icon-save" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h11l5 5v11a2 2 0 01-2 2z"/><path d="M7 3v5h8"/><path d="M7 21v-6h10v6"/></svg> {{ backupLabel }}</span>
       </footer>
 
-      <!-- 截图查看器（扑克牌堆展开/缩回） -->
-      <div class="pv-zoom" ref="pvZoom"><img :src="previewImageUrl" alt=""></div>
+      <!-- 截图查看器（扑克牌堆展开/缩回；缩放层纯黑过渡，图片由预加载完成后在舞台一次性放出） -->
+      <div class="pv-zoom" ref="pvZoom"></div>
       <div class="pv-viewer" :class="{open: imagePreviewVisible}" @click.self="closePreview">
         <div class="pv-stage" :class="{ready: previewStageReady}">
           <div class="pv-slide" :style="{ transform: 'translateX(-' + previewIndex * 100 + '%)' }">
             <div class="pv-slide-item" v-for="(img, i) in previewImages" :key="img">
-              <img :src="'//' + serverHost + '/uploads/' + encodeURIComponent(img)" alt="截图预览" />
+              <img :src="'//' + serverHost + '/uploads/' + encodeURIComponent(img)" alt="截图预览" v-show="previewReady" />
             </div>
           </div>
           <button class="pv-arrow l" :disabled="previewIndex<=0" @click="previewPrev" aria-label="上一张">‹</button>

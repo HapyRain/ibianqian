@@ -39,6 +39,8 @@
       })());
       /** 主题选择面板可见性 */
       const themeMenuVisible = ref(false);
+      /** 主题面板退场中（渐隐关闭，不直接消失） */
+      const themeMenuLeaving = ref(false);
       /** 主题面板 fixed 坐标（点击按钮时按按钮位置计算，右缘对齐） */
       const themeMenuX = ref(0);
       const themeMenuY = ref(0);
@@ -47,6 +49,7 @@
        * 切换主题面板：记录按钮位置作为面板锚点（面板宽 230px，右缘对齐按钮右缘）
        */
       function toggleThemeMenu(e) {
+        if (themeMenuLeaving.value) return; // 退场动画期间忽略连点
         themeMenuVisible.value = !themeMenuVisible.value;
         if (themeMenuVisible.value && e && e.currentTarget) {
           const r = e.currentTarget.getBoundingClientRect();
@@ -55,14 +58,26 @@
         }
       }
 
+      /** 渐隐关闭主题面板（播放退场动画后隐藏，避免直接消失突兀） */
+      function closeThemeMenu() {
+        if (!themeMenuVisible.value || themeMenuLeaving.value) return;
+        themeMenuLeaving.value = true;
+        setTimeout(() => {
+          themeMenuVisible.value = false;
+          themeMenuLeaving.value = false;
+        }, 200); // 与 .theme-popover.leaving 退场动画时长一致
+      }
+
       // ==================== 更多菜单（导出 / 导入） ====================
       const moreMenuVisible = ref(false);
+      const moreMenuLeaving = ref(false);
       const moreMenuX = ref(0);
       const moreMenuY = ref(0);
       /** 隐藏的导入文件选择器 */
       const importFileInput = ref(null);
 
       function toggleMoreMenu(e) {
+        if (moreMenuLeaving.value) return; // 退场动画期间忽略连点
         moreMenuVisible.value = !moreMenuVisible.value;
         if (moreMenuVisible.value && e && e.currentTarget) {
           const r = e.currentTarget.getBoundingClientRect();
@@ -71,11 +86,21 @@
         }
       }
 
+      /** 渐隐关闭更多菜单 */
+      function closeMoreMenu() {
+        if (!moreMenuVisible.value || moreMenuLeaving.value) return;
+        moreMenuLeaving.value = true;
+        setTimeout(() => {
+          moreMenuVisible.value = false;
+          moreMenuLeaving.value = false;
+        }, 200);
+      }
+
       /**
        * 导出数据：拉取 /api/export 并下载 JSON 备份
        */
       async function exportData() {
-        moreMenuVisible.value = false;
+        closeMoreMenu();
         try {
           const resp = await fetch(apiUrl('/api/export'));
           const data = await resp.json();
@@ -112,7 +137,7 @@
       async function onImportFileSelect(event) {
         const file = event.target.files && event.target.files[0];
         event.target.value = '';
-        moreMenuVisible.value = false;
+        closeMoreMenu();
         if (!file) return;
         let text;
         try {
@@ -164,7 +189,40 @@
         if (!st) { st = document.createElement('style'); st.id = 'theme-style'; document.head.appendChild(st); }
         st.textContent = window.buildThemeCss(t);
       }
-      // setup 阶段立即应用已保存主题（早于首帧渲染，避免默认色闪烁）
+
+      /** 改造幕布层（复用节点） */
+      let rebuildLayer = null;
+      let rebuildTimers = [];
+
+      /**
+       * 主题切换 + 暗色幕布过渡：幕布淡入 → 幕布最浓时换肤（零跳变）→ 幕布淡出
+       * 全程 ≈1.05s，幕布期间挡点击，有始有终；相同主题不重播。
+       */
+      function applyThemeRebuild(id) {
+        const t = themes.find(x => x.id === id);
+        if (!t) return;
+        closeThemeMenu();
+        if (themeId.value === id) return; // 已是该主题，不重播过渡
+        rebuildTimers.forEach(clearTimeout);
+        rebuildTimers = [];
+        if (!rebuildLayer) {
+          rebuildLayer = document.createElement('div');
+          rebuildLayer.id = 'theme-rebuild';
+          rebuildLayer.className = 'theme-rebuild';
+          document.body.appendChild(rebuildLayer);
+        }
+        rebuildLayer.classList.remove('show');
+        void document.body.offsetHeight; // 强制回流，确保挂载动画必然重播（确定性优先）
+        rebuildLayer.classList.add('show');
+        rebuildTimers.push(setTimeout(() => {
+          applyTheme(id);                    // 幕布全屏时换肤，视觉零跳变
+          rebuildLayer.classList.remove('show');
+        }, 520));
+        rebuildTimers.push(setTimeout(() => {
+          rebuildLayer.classList.remove('show'); // 兜底（与上同效，防异常态残留）
+        }, 1200));
+      }
+      // setup 阶段立即应用已保存主题（早于首帧渲染，避免默认色闪烁；首载不过渡）
       applyTheme(themeId.value);
 
       // ==================== 响应式数据 ====================
@@ -912,6 +970,7 @@
 
         console.log(`[WS] handleRemoteUpdate: taskId=${taskId?.substring(0,8)}, bugId=${bugId}, ${field}=${value} (旧值=${bug[field]})`);
         bug[field] = value;
+        if (field === 'status') triggerStatusIconAnim(bug);
 
         // 同步 completedAt 时间锚点
         if (completedAt !== undefined) {
@@ -1356,6 +1415,22 @@
        * - 筛选视图：行飞向目标状态 tag 被吸收（平移+缩小+淡出，1s），完成后才改状态
        * - 计数闪烁：飞行/移动完成后，目标筛选徽标闪一下（"系统已收到操作"反馈）
        */
+      /**
+       * 状态图标变化瞬间的一次性动效（静默常态 + 变化反馈，播完静止）：
+       * 给该行的 .status-sel-icon 加 .icon-anim，对应 CSS 动画只播一次（圆环落定/弧转半圈/对勾描边）
+       */
+      function triggerStatusIconAnim(bug) {
+        nextTick(() => {
+          const rowEl = document.querySelector('.bug-row[data-bug-id="' + bug.id + '"]');
+          if (!rowEl) return;
+          const icon = rowEl.querySelector('.status-sel-icon');
+          if (!icon) return;
+          icon.classList.remove('icon-anim');
+          void icon.offsetWidth; // 强制回流，确保动画必然重播（确定性优先）
+          icon.classList.add('icon-anim');
+        });
+      }
+
       function onStatusChange(bug, newStatus) {
         if (bug.status === newStatus) return;
 
@@ -1363,6 +1438,7 @@
         const rowEl = document.querySelector('.bug-row[data-bug-id="' + bug.id + '"]');
         if (statusFilter.value !== '全部' && rowEl) {
           flyRowToTag(bug, rowEl, newStatus);
+          triggerStatusIconAnim(bug);
           return;
         }
 
@@ -1374,6 +1450,7 @@
         pendingFlashTimer = setTimeout(() => { pendingFlashStatus = null; }, 800);
         bug.status = newStatus;
         bug.statusChangedAt = Date.now(); // 新来的往组末尾
+        triggerStatusIconAnim(bug);
         // 自动管理完成时间锚点
         if (newStatus === '已完成') {
           bug.completedAt = formatTimestamp(new Date());
@@ -1648,11 +1725,29 @@
       }
 
       /**
-       * 切换任务
+       * 切换项目：方向感知的面板滑入（新项目在 orderedTasks 右侧 → 从右滑入；左侧 → 从左滑入）
        */
       function switchTask(taskId) {
+        if (currentTaskId.value === taskId) return; // 点当前项目不重播
+        const ids = orderedTasks.value.map(t => t.id);
+        const oldIdx = ids.indexOf(currentTaskId.value);
+        const newIdx = ids.indexOf(taskId);
         currentTaskId.value = taskId;
         persistCurrentTask();
+        if (oldIdx !== -1 && newIdx !== -1 && newIdx !== oldIdx) {
+          swipeBugPanel(newIdx > oldIdx ? 'right' : 'left');
+        }
+      }
+
+      /** 面板滑入动画：内容切换后 nextTick 加一次性动画类（强制回流保证必然重播，播完静止） */
+      function swipeBugPanel(dir) {
+        nextTick(() => {
+          const panel = document.querySelector('.bug-panel');
+          if (!panel) return;
+          panel.classList.remove('swipe-right', 'swipe-left');
+          void panel.offsetWidth; // 强制回流，确保动画必然重播（确定性优先）
+          panel.classList.add(dir === 'right' ? 'swipe-right' : 'swipe-left');
+        });
       }
 
       /**
@@ -2698,6 +2793,16 @@
       }
 
       /**
+       * 牌堆容器宽度自适应图片数量（= 最后一张卡片右缘）：图片少时紧凑、右侧无空隙；
+       * 图片加多时容器自然变宽（卡片向左扩展）。卡片宽 52px、起始偏移 2px、步进 12px。
+       * @param {number} n 图片总数（视觉最多叠 6 张）
+       */
+      function stackWrapStyle(n) {
+        const count = Math.min(n || 0, 6);
+        return { width: (52 + 2 + (count - 1) * 12) + 'px' };
+      }
+
+      /**
        * 备注 mini 牌堆卡片定位样式（缩小版：卡片 44×60、偏移 [2,12,24,36,48,60]，最多 6 张）
        * 第 1 张最上层，点击整堆从第一张进查看器
        */
@@ -2714,6 +2819,24 @@
        * @param {string} [filename] 起始图片文件名（缺省时预览第一张）
        * @param {Event} [evt] 点击事件（取其 currentTarget 的矩形作为展开起点）
        */
+      /** 当前预览图是否已完整下载（黑屏等待 → 下载完成一次性放出完整图，杜绝加载中间态闪烁） */
+      const previewReady = ref(false);
+      /** 当前预加载器（防快速翻页时旧回调误判） */
+      let previewPreloader = null;
+
+      /**
+       * 预加载当前预览图：下载完成（含缓存命中）前保持黑屏，完成后放行显示
+       */
+      function preloadPreviewImage(url) {
+        previewReady.value = false;
+        if (previewPreloader) { previewPreloader.onload = null; previewPreloader.onerror = null; }
+        const im = new Image();
+        previewPreloader = im;
+        im.onload = () => { if (previewPreloader === im) previewReady.value = true; };
+        im.onerror = () => { if (previewPreloader === im) previewReady.value = true; }; // 失败也放行（避免黑屏卡死）
+        im.src = url;
+      }
+
       function openPreview(bug, filename, evt) {
         if (!bug || !Array.isArray(bug.images) || !bug.images.length) return;
         previewBug.value = bug;
@@ -2732,9 +2855,10 @@
           zoom.style.left = r.left + 'px'; zoom.style.top = r.top + 'px';
           zoom.style.width = r.width + 'px'; zoom.style.height = r.height + 'px';
           zoom.style.transform = 'none';
-          zoom.querySelector('img').src = previewImageUrl.value;
+          // 缩放层纯黑放大过渡（不渲染图片，杜绝任何加载中间态）；图片由预加载完成后在舞台一次性放出
           imagePreviewVisible.value = true;   // 背景与放大同步开始变黑
           previewStageReady.value = false;
+          preloadPreviewImage(previewImageUrl.value);
           requestAnimationFrame(() => requestAnimationFrame(() => {
             zoom.style.left = '50%'; zoom.style.top = '50%';
             zoom.style.transform = 'translate(-50%,-50%)';
@@ -2748,6 +2872,7 @@
         } else {
           imagePreviewVisible.value = true;
           previewStageReady.value = true;
+          preloadPreviewImage(previewImageUrl.value);
         }
       }
 
@@ -2768,7 +2893,6 @@
           zoom.style.left = '50%'; zoom.style.top = '50%';
           zoom.style.transform = 'translate(-50%,-50%)';
           zoom.style.width = 'min(720px,86vw)'; zoom.style.height = 'min(520px,72vh)';
-          zoom.querySelector('img').src = '//' + serverHost.value + '/uploads/' + encodeURIComponent(previewImages.value[previewIndex.value] || '');
           requestAnimationFrame(() => requestAnimationFrame(() => {
             zoom.style.left = r.left + 'px'; zoom.style.top = r.top + 'px';
             zoom.style.transform = 'none';
@@ -2796,6 +2920,7 @@
         previewImageUrl.value = '//' + serverHost.value + '/uploads/' + encodeURIComponent(images[0]);
         imagePreviewVisible.value = true;
         previewStageReady.value = true;
+        preloadPreviewImage(previewImageUrl.value);
       }
 
       /**
@@ -2847,12 +2972,12 @@
       /**
        * 预览上一张
        */
-      function previewPrev() { if (previewIndex.value > 0) { previewIndex.value--; previewImageUrl.value = '//' + serverHost.value + '/uploads/' + encodeURIComponent(previewImages.value[previewIndex.value]); } }
+      function previewPrev() { if (previewIndex.value > 0) { previewIndex.value--; previewImageUrl.value = '//' + serverHost.value + '/uploads/' + encodeURIComponent(previewImages.value[previewIndex.value]); preloadPreviewImage(previewImageUrl.value); } }
 
       /**
        * 预览下一张
        */
-      function previewNext() { if (previewIndex.value < previewImages.value.length - 1) { previewIndex.value++; previewImageUrl.value = '//' + serverHost.value + '/uploads/' + encodeURIComponent(previewImages.value[previewIndex.value]); } }
+      function previewNext() { if (previewIndex.value < previewImages.value.length - 1) { previewIndex.value++; previewImageUrl.value = '//' + serverHost.value + '/uploads/' + encodeURIComponent(previewImages.value[previewIndex.value]); preloadPreviewImage(previewImageUrl.value); } }
 
       /**
        * 整行拖拽（表格级别事件代理）
@@ -3086,17 +3211,22 @@
         themes,
         themeId,
         themeMenuVisible,
+        themeMenuLeaving,
         themeMenuX,
         themeMenuY,
         toggleThemeMenu,
+        closeThemeMenu,
         applyTheme,
+        applyThemeRebuild,
 
         // 更多菜单（导出 / 导入）
         moreMenuVisible,
+        moreMenuLeaving,
         moreMenuX,
         moreMenuY,
         importFileInput,
         toggleMoreMenu,
+        closeMoreMenu,
         exportData,
         onImportFileSelect,
         launchRocket,
@@ -3135,6 +3265,7 @@
         imagePreviewVisible,
         previewImageUrl,
         previewImages,
+        previewReady,
         previewIndex,
         previewStageReady,
         previewBug,
@@ -3294,6 +3425,7 @@
         previewNext,
         closePreview,
         stackCardStyle,
+        stackWrapStyle,
         noteStackCardStyle,
       };
     },
