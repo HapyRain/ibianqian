@@ -1,0 +1,23 @@
+# 依赖与构建产物（新环境 npm install / npm run build 重新生成）
+node_modules/
+pack814/
+pack*/
+dist/
+release/
+build-log.txt
+
+# 临时与运行时产物
+tmp/
+uploads/
+*.log
+data.json.corrupted.*
+data.json.backup-*
+
+# 视觉伴侣与设计过程文件（可选保留，按需取消注释）
+.superpowers/
+.claude/
+.mimocode/
+
+# 系统文件
+Thumbs.db
+.DS_Store
