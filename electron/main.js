@@ -27,9 +27,18 @@ let tray = null;
 app.isQuitting = false;
 
 // ================================================================
-// 创建托盘图标（16x16 蓝色图标，纯内存生成）
+// 应用图标（开发与打包路径一致：asar 内 public/favicon.ico）
+// ================================================================
+const APP_ICON_PATH = path.join(__dirname, '..', 'public', 'favicon.ico');
+
+// ================================================================
+// 创建托盘图标（加载应用图标；加载失败回退纯色块）
 // ================================================================
 function createTrayIcon() {
+  try {
+    const img = nativeImage.createFromPath(APP_ICON_PATH);
+    if (!img.isEmpty()) return img;
+  } catch (e) { /* 忽略，走回退 */ }
   const size = 16;
   const buf = Buffer.alloc(size * size * 4);
   for (let i = 0; i < buf.length; i += 4) {
@@ -172,6 +181,7 @@ function createWindow(port) {
     minWidth: 600,
     minHeight: 400,
     title: '任务清单 - 多人协同',
+    icon: APP_ICON_PATH, // 窗口/任务栏图标（Windows 上显式指定，避免默认 Electron 图标）
     show: true,
     autoHideMenuBar: true,
     webPreferences: {

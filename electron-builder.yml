@@ -12,6 +12,7 @@ files:
   - data.json
 win:
   target: portable
+  icon: build/icon.ico   # 显式指定（win-unpacked 与 portable 自解压壳共用）
 portable:
   artifactName: 任务清单.exe
 extraResources: []

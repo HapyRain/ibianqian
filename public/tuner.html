@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>任务清单 - 在线调色台</title>
+<title>任务清单 - 主题展厅 / 在线调色台</title>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   html, body { height: 100%; }
@@ -24,11 +24,12 @@
     font-size: 13px; color: #9a9aa8;
   }
   #preview-head .dot { width: 8px; height: 8px; border-radius: 50%; background: #4cb782; }
+  #preview-head .cur { color: #e8e8f0; font-weight: 600; margin-left: auto; }
   #preview { flex: 1; width: 100%; border: 0; background: #fff; }
 
   /* 右侧控制面板 */
   #panel {
-    width: 348px; flex: none; overflow-y: auto;
+    width: 396px; flex: none; overflow-y: auto;
     background: #26262f;
     border-left: 1px solid #3a3a48;
     padding: 14px 16px 20px;
@@ -64,6 +65,20 @@
   .tc-swatch { display: flex; gap: 3px; flex: none; }
   .tc-swatch span { width: 14px; height: 14px; border-radius: 50%; border: 1px solid rgba(255,255,255,.25); }
   .tc-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+  /* 主题详情 */
+  .theme-detail {
+    margin-top: 10px; border: 1px solid #3a3a48; border-radius: 10px;
+    background: #2c2c37; padding: 12px;
+  }
+  .theme-detail .td-name { font-size: 14px; color: #fff; font-weight: 600; }
+  .theme-detail .td-desc { font-size: 12px; color: #9a9aa8; margin: 3px 0 10px; line-height: 1.5; }
+  .td-swatches { display: grid; grid-template-columns: 1fr 1fr; gap: 5px 12px; }
+  .td-swatch { display: flex; align-items: center; gap: 7px; font-size: 11.5px; color: #b8b8c8; }
+  .td-swatch i { width: 16px; height: 16px; border-radius: 5px; border: 1px solid rgba(255,255,255,.22); flex: none; }
+  .td-swatch b { flex: 1; font-weight: 400; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .td-swatch code { color: #8a8a9c; font-size: 10.5px; font-family: Consolas, monospace; }
+
   .btn {
     border: 1px solid #45455a; background: #30303c; color: #d8d8e0;
     border-radius: 7px; padding: 5px 10px; font-size: 12px; cursor: pointer;
@@ -84,26 +99,28 @@
   <div id="preview-wrap">
     <div id="preview-head">
       <span class="dot"></span>
-      <span>实时预览（iframe 内即为真实应用）—— 改动即时生效，不会写入任何文件</span>
+      <span>实时预览（iframe 内即为真实应用）—— 点选主题 / 微调即时生效，不会写入任何文件</span>
+      <span class="cur" id="cur-label"></span>
     </div>
     <iframe id="preview" src="/"></iframe>
   </div>
 
   <div id="panel">
-    <h1>在线调色台</h1>
-    <div class="sub">改动仅作用于左侧预览（注入 CSS 变量覆盖）。调好后点「复制导出」，把内容发给我，我写回 style.css。</div>
+    <h1>主题展厅 · 在线调色台</h1>
+    <div class="sub">13 套成品主题（6 浅 + 7 深），点选即在左侧预览完整效果（含星云/纸纹/霓虹等专属元素）。<br>「复制导出」可生成主题对象，粘贴给我即可写回 themes.js。</div>
 
-    <div class="section-title">主题（10 套 · 点选预览）</div>
+    <div class="section-title">主题（13 套 · 点选预览）</div>
     <div class="theme-grid" id="theme-grid"></div>
+    <div class="theme-detail" id="theme-detail"></div>
 
-    <div class="section-title">高级微调（可选）</div>
+    <div class="section-title">高级微调（可选，改当前主题）</div>
     <div class="row"><label title="窗口背板">窗口底色</label><input type="color" id="bg"><input class="hex" id="bg-hex"></div>
     <div class="row"><label title="面板/行底色">面板 / 行</label><input type="color" id="surface"><input class="hex" id="surface-hex"></div>
     <div class="row"><label title="弹窗/悬浮/高亮">弹窗 / 高亮</label><input type="color" id="surface-hi"><input class="hex" id="surface-hi-hex"></div>
     <div class="row"><label title="头部/工具栏材质">头栏材质</label>
       <select id="header-bg" style="flex:1;background:#1e1e26;color:#d8d8e0;border:1px solid #3a3a48;border-radius:6px;padding:4px 6px;font-size:12px;">
-        <option value="mica">毛玻璃白（现状）</option>
-        <option value="solid-hi" selected>纯色 · 弹窗色（推荐）</option>
+        <option value="mica">毛玻璃白（浅色）</option>
+        <option value="solid-hi">纯色 · 弹窗色（深色推荐）</option>
         <option value="solid-surface">纯色 · 面板色</option>
       </select>
     </div>
@@ -111,6 +128,7 @@
     <div class="section-title">文字与线条</div>
     <div class="row"><label>正文文字</label><input type="color" id="text"><input class="hex" id="text-hex"></div>
     <div class="row"><label>次要文字</label><input type="color" id="text-2"><input class="hex" id="text-2-hex"></div>
+    <div class="row"><label>反白字（主色底上的文字）</label><input type="color" id="text-inverse"><input class="hex" id="text-inverse-hex"></div>
     <div class="row"><label>发丝线</label><input type="color" id="line"><input class="hex" id="line-hex"></div>
     <div class="row"><label>行分隔线</label><input type="color" id="line-soft"><input class="hex" id="line-soft-hex"></div>
 
@@ -120,17 +138,24 @@
     <div class="row"><label>成功 / 已完成</label><input type="color" id="ok"><input class="hex" id="ok-hex"></div>
     <div class="row"><label>警告 / 修复中</label><input type="color" id="warn"><input class="hex" id="warn-hex"></div>
 
+    <div class="section-title">状态与连接色</div>
+    <div class="row"><label>待修复（呼吸点）</label><input type="color" id="status-pending"><input class="hex" id="status-pending-hex"></div>
+    <div class="row"><label>修复中（扳手）</label><input type="color" id="status-fixing"><input class="hex" id="status-fixing-hex"></div>
+    <div class="row"><label>已完成（充电）</label><input type="color" id="status-done"><input class="hex" id="status-done-hex"></div>
+    <div class="row"><label>连接成功点</label><input type="color" id="ok-dot"><input class="hex" id="ok-dot-hex"></div>
+    <div class="row"><label>连接中（琥珀）</label><input type="color" id="conn-ing"><input class="hex" id="conn-ing-hex"></div>
+
     <div class="section-title">立体感</div>
     <div class="row"><label>阴影强度</label><input type="range" id="shadow" min="0" max="200" value="120"><span class="val" id="shadow-val">120%</span></div>
     <div class="row"><label>行圆角</label><input type="range" id="radius" min="4" max="22" value="11"><span class="val" id="radius-val">11px</span></div>
 
     <div class="btn-group" style="margin-top:10px;">
-      <button class="btn" id="btn-reset">恢复默认</button>
-      <button class="btn ok-copy" id="btn-copy">复制导出 CSS</button>
+      <button class="btn" id="btn-reset">恢复所选主题</button>
+      <button class="btn ok-copy" id="btn-copy">复制导出（主题对象）</button>
     </div>
-    <div class="section-title">导出（发给助手写回 style.css）</div>
+    <div class="section-title">导出（粘贴给助手写回 themes.js）</div>
     <textarea id="export" readonly spellcheck="false"></textarea>
-    <div class="hint">导出的内容包含 :root 变量 + 行阴影/头栏等结构性覆盖，可直接替换 style.css 对应区块。</div>
+    <div class="hint">导出为完整主题对象（17 色 + 材质 + 阴影 + 圆角），可直接插入 themes.js 的 BUGLIST_THEMES 数组。</div>
   </div>
 
   <script src="themes.js"></script>
@@ -141,42 +166,34 @@
   var $ = function (id) { return document.getElementById(id); };
 
   var THEMES = window.BUGLIST_THEMES || [];
+  /** 当前正在预览的主题对象（点选卡片时替换；微调只改它的 vars 副本） */
+  var curTheme = THEMES.length ? JSON.parse(JSON.stringify(THEMES[0])) : null;
 
-  // 主题 → 面板值
+  var KEYS = ['bg', 'surface', 'surface-hi', 'line', 'line-soft',
+    'text', 'text-2', 'text-inverse',
+    'primary', 'danger', 'ok', 'warn',
+    'status-pending', 'status-fixing', 'status-done', 'ok-dot', 'conn-ing'];
+
+  // 主题 headerBg 值 ↔ 面板 select 值
+  var HDR_TO_SELECT = { mica: 'mica', surface: 'solid-surface', 'surface-hi': 'solid-hi' };
+  var SELECT_TO_HDR = { mica: 'mica', 'solid-surface': 'surface', 'solid-hi': 'surface-hi' };
+
+  /** 主题对象 → 面板值 */
   function loadThemeVals(t) {
-    return {
-      bg: t.vars.bg, surface: t.vars.surface, 'surface-hi': t.vars['surface-hi'],
-      line: t.vars.line, 'line-soft': t.vars['line-soft'],
-      text: t.vars.text, 'text-2': t.vars['text-2'],
-      primary: t.vars.primary, danger: t.vars.danger, ok: t.vars.ok, warn: t.vars.warn,
-      'header-bg': t.headerBg || 'solid-hi',
-      shadow: t.shadow || 120,
-      radius: t.radius || 11
-    };
+    var v = {};
+    KEYS.forEach(function (k) { v[k] = t.vars[k]; });
+    v['header-bg'] = HDR_TO_SELECT[t.headerBg] || 'solid-hi';
+    v.shadow = t.shadow || 120;
+    v.radius = t.radius || 11;
+    return v;
   }
 
-  // 默认 = 第一套主题（纸面暖调）
-  var DEFAULTS = THEMES.length ? loadThemeVals(THEMES[0]) : {
-    bg: '#E6E0D1', surface: '#F7F3E8', 'surface-hi': '#FEFBF2',
-    line: '#D5CEBB', 'line-soft': '#E3DCCB',
-    text: '#26221B', 'text-2': '#7D7666',
-    primary: '#5E6AD2', danger: '#E5484D', ok: '#3FA06E', warn: '#B98A1E',
-    'header-bg': 'solid-hi', shadow: 140, radius: 12
-  };
-
-  var KEYS = ['bg', 'surface', 'surface-hi', 'line', 'line-soft', 'text', 'text-2', 'primary', 'danger', 'ok', 'warn'];
-
-  function bindColor(key) {
-    var input = $(key), hex = $(key + '-hex');
-    input.addEventListener('input', function () {
-      hex.value = input.value.toUpperCase();
-      apply();
-    });
-    hex.addEventListener('change', function () {
-      var v = hex.value.trim().toUpperCase();
-      if (/^#[0-9A-F]{6}$/.test(v)) { input.value = v; apply(); }
-    });
-    return input;
+  /** 面板值（微调后） → 主题对象 */
+  function applyCurrentValsToCur() {
+    KEYS.forEach(function (k) { curTheme.vars[k] = $(k).value.toUpperCase(); });
+    curTheme.headerBg = SELECT_TO_HDR[$('header-bg').value] || 'surface-hi';
+    curTheme.shadow = parseInt($('shadow').value, 10);
+    curTheme.radius = parseInt($('radius').value, 10);
   }
 
   function readVals() {
@@ -195,65 +212,70 @@
     $('radius').value = v.radius; $('radius-val').textContent = v.radius + 'px';
   }
 
-  function hexToRgb(hex) {
-    var n = parseInt(hex.slice(1), 16);
-    return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+  function bindColor(key) {
+    var input = $(key), hex = $(key + '-hex');
+    input.addEventListener('input', function () {
+      hex.value = input.value.toUpperCase();
+      apply();
+    });
+    hex.addEventListener('change', function () {
+      var v = hex.value.trim().toUpperCase();
+      if (/^#[0-9A-F]{6}$/.test(v)) { input.value = v; apply(); }
+    });
   }
 
-  // 阴影按强度缩放 alpha（s = 强度倍数）
-  function shadowCss(s) {
-    var a = function (base) { return Math.min(1, +(base * s).toFixed(3)); };
-    return {
-      card: '0 1px 2px rgba(0,0,0,' + a(0.05) + '), 0 2px 8px rgba(0,0,0,' + a(0.07) + '), 0 0 0 1px rgba(0,0,0,' + a(0.03) + ')',
-      hover: '0 2px 5px rgba(0,0,0,' + a(0.06) + '), 0 8px 22px rgba(0,0,0,' + a(0.12) + ')',
-      dialog: '0 0 0 1px rgba(0,0,0,' + a(0.05) + '), 0 10px 30px rgba(0,0,0,' + a(0.15) + '), 0 30px 70px rgba(0,0,0,' + a(0.11) + ')'
-    };
-  }
-
-  function buildCss(v) {
-    var s = v.shadow / 100;
-    var sh = shadowCss(s);
-    var headerBg;
-    if (v['header-bg'] === 'mica') headerBg = 'rgba(255,255,255,0.72)';
-    else if (v['header-bg'] === 'solid-hi') headerBg = 'var(--surface-hi)';
-    else headerBg = 'var(--surface)';
+  /** 生成主题对象字面量（供导出） */
+  function themeLiteral(t) {
     var lines = [];
-    lines.push(':root {');
-    lines.push('  --bg: ' + v.bg + ';');
-    lines.push('  --surface: ' + v.surface + ';');
-    lines.push('  --surface-hi: ' + v['surface-hi'] + ';');
-    lines.push('  --line: ' + v.line + ';');
-    lines.push('  --line-soft: ' + v['line-soft'] + ';');
-    lines.push('  --text: ' + v.text + ';');
-    lines.push('  --text-2: ' + v['text-2'] + ';');
-    lines.push('  --primary: ' + v.primary + ';');
-    lines.push('  --danger: ' + v.danger + ';');
-    lines.push('  --ok: ' + v.ok + ';');
-    lines.push('  --warn: ' + v.warn + ';');
-    lines.push('  --shadow-card: ' + sh.card + ';');
-    lines.push('  --shadow-hover: ' + sh.hover + ';');
-    lines.push('  --shadow-dialog: ' + sh.dialog + ';');
-    lines.push('  --radius: ' + v.radius + 'px;');
+    lines.push('{');
+    lines.push("  id: '" + (t.id || 'custom') + "',");
+    lines.push("  name: '" + (t.name || '自定义主题') + "',");
+    lines.push("  desc: '" + (t.desc || '') + "',");
+    lines.push('  dark: ' + (t.dark ? 'true' : 'false') + ',');
+    lines.push("  headerBg: '" + t.headerBg + "',");
+    lines.push('  shadow: ' + t.shadow + ',');
+    lines.push('  radius: ' + t.radius + ',');
+    lines.push('  vars: {');
+    KEYS.forEach(function (k, i) {
+      lines.push("    " + (k.indexOf('-') > -1 ? "'" + k + "'" : k) + ": '" + t.vars[k].toUpperCase() + "'" + (i < KEYS.length - 1 ? ',' : ''));
+    });
+    lines.push('  }');
     lines.push('}');
-    lines.push('');
-    lines.push('/* 结构性覆盖：让行/区块真正"立起来" */');
-    lines.push('.app-header, .task-tabs-bar { background: ' + headerBg + '; border-color: var(--line); }');
-    lines.push('.bug-panel { background: var(--surface); border-color: var(--line-soft); box-shadow: var(--shadow-card); }');
-    lines.push('.search-bar { background: var(--surface-hi); border-color: var(--line-soft); }');
-    lines.push('.bug-row { box-shadow: var(--shadow-card); }');
-    lines.push('.bug-row:hover { box-shadow: var(--shadow-hover); }');
-    lines.push('.bug-row-spotlight { box-shadow: 0 0 0 4px rgba(255,255,255,.7), 0 6px 22px rgba(0,0,0,.22) !important; }');
     return lines.join('\n');
   }
 
+  /** 应用：注入完整主题 CSS 到 iframe（含专属元素），并刷新详情/导出 */
   function apply() {
-    var v = readVals();
-    $('export').value = buildCss(v);
+    if (!curTheme) return;
+    applyCurrentValsToCur();
+    $('export').value = themeLiteral(curTheme);
+    $('cur-label').textContent = curTheme.name + (curTheme.dark ? '（深色）' : '（浅色）');
     var doc = iframe.contentDocument;
     if (!doc) return;
     var st = doc.getElementById('tuner-style');
     if (!st) { st = doc.createElement('style'); st.id = 'tuner-style'; doc.head.appendChild(st); }
-    st.textContent = buildCss(v);
+    st.textContent = window.buildThemeCss(curTheme);
+  }
+
+  /** 渲染当前主题详情（17 色色板） */
+  function renderDetail(t) {
+    var box = $('theme-detail');
+    var names = {
+      bg: '窗口背板', surface: '面板/行', 'surface-hi': '弹窗/高亮',
+      line: '发丝线', 'line-soft': '行分隔线', text: '正文', 'text-2': '次要文字', 'text-inverse': '反白字',
+      primary: '主色', danger: '危险', ok: '成功', warn: '警告',
+      'status-pending': '待修复', 'status-fixing': '修复中', 'status-done': '已完成',
+      'ok-dot': '连接成功', 'conn-ing': '连接中'
+    };
+    var html = '<div class="td-name">' + t.name + '</div>' +
+      '<div class="td-desc">' + (t.desc || '') + ' ｜ 阴影 ' + t.shadow + '% ｜ 圆角 ' + t.radius + 'px ｜ ' +
+      (t.dark ? '深色主题' : '浅色主题') + ' ｜ 头栏 ' + t.headerBg + '</div>' +
+      '<div class="td-swatches">';
+    KEYS.forEach(function (k) {
+      html += '<div class="td-swatch"><i style="background:' + t.vars[k] + '"></i><b>' + names[k] + '</b><code>' + t.vars[k].toUpperCase() + '</code></div>';
+    });
+    html += '</div>';
+    box.innerHTML = html;
   }
 
   // 事件绑定
@@ -266,9 +288,33 @@
     });
   });
 
-  $('btn-reset').addEventListener('click', function () { writeVals(DEFAULTS); apply(); });
+  /** 在 iframe 内播放"改造幕布"过渡，结束后执行 cb（微调不走幕布，即时生效） */
+  function iframeRebuild(cb) {
+    var doc = iframe.contentDocument;
+    if (!doc || !doc.body) { cb(); return; }
+    var layer = doc.getElementById('theme-rebuild');
+    if (!layer) {
+      layer = doc.createElement('div');
+      layer.id = 'theme-rebuild';
+      layer.className = 'theme-rebuild';
+      doc.body.appendChild(layer);
+    }
+    layer.classList.remove('show');
+    void doc.body.offsetHeight; // 强制回流，确保挂载动画必然重播
+    layer.classList.add('show');
+    setTimeout(function () { cb(); layer.classList.remove('show'); }, 520);
+  }
 
-  // 主题网格：点选即预览
+  $('btn-reset').addEventListener('click', function () {
+    if (!curTheme) return;
+    var orig = THEMES.find(function (x) { return x.id === curTheme.id; }) || THEMES[0];
+    curTheme = JSON.parse(JSON.stringify(orig));
+    writeVals(loadThemeVals(curTheme));
+    renderDetail(curTheme);
+    iframeRebuild(function () { apply(); });
+  });
+
+  // 主题网格：点选即预览（走改造幕布过渡）
   var grid = $('theme-grid');
   THEMES.forEach(function (t) {
     var b = document.createElement('button');
@@ -280,12 +326,17 @@
       '<span style="background:' + t.vars.primary + '"></span>' +
       '</span><span class="tc-name">' + t.name + '</span>';
     b.addEventListener('click', function () {
-      writeVals(loadThemeVals(t)); apply();
+      curTheme = JSON.parse(JSON.stringify(t));
+      writeVals(loadThemeVals(t));
+      renderDetail(t);
       grid.querySelectorAll('.theme-card').forEach(function (x) { x.classList.remove('active'); });
       b.classList.add('active');
+      iframeRebuild(function () { apply(); });
     });
     grid.appendChild(b);
   });
+  // 默认激活第一套
+  if (grid.firstChild) grid.firstChild.classList.add('active');
 
   $('btn-copy').addEventListener('click', function () {
     var btn = this;
@@ -299,7 +350,10 @@
 
   iframe.addEventListener('load', function () { apply(); });
   // 初始化
-  writeVals(DEFAULTS);
+  if (curTheme) {
+    writeVals(loadThemeVals(curTheme));
+    renderDetail(curTheme);
+  }
   apply();
 })();
 </script>

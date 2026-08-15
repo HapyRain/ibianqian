@@ -928,7 +928,7 @@ async function handleMessage(ws, rawMessage, _wss) {
 // ================================================================
 // 4. HTTP 静态文件服务
 // ================================================================
-function serveStaticFile(res, filePath) {
+function serveStaticFile(res, filePath, cacheImmutable) {
   const ext = path.extname(filePath).toLowerCase();
   const contentType = MIME_TYPES[ext] || 'application/octet-stream';
 
@@ -947,7 +947,10 @@ function serveStaticFile(res, filePath) {
       if (ext === '.html') {
         body = Buffer.from(content.toString('utf-8').replace(/__APP_VERSION__/g, APP_VERSION), 'utf-8');
       }
-      res.writeHead(200, { 'Content-Type': contentType, 'Cache-Control': 'no-cache' });
+      // uploads 图片文件名唯一且内容不可变 → 长缓存（浏览器缓存命中，二次查看/翻页秒开，消除"先模糊后清晰"的闪现）
+      // 其他静态文件（html/js/css）保持 no-cache 便于开发即时更新
+      const cacheControl = cacheImmutable ? 'public, max-age=31536000, immutable' : 'no-cache';
+      res.writeHead(200, { 'Content-Type': contentType, 'Cache-Control': cacheControl });
       res.end(body);
     }
   });
@@ -1608,7 +1611,7 @@ function createHttpHandler() {
       const fileExists = fs.existsSync(fullPath);
       if (!fileExists) console.log(`[Static] 图片不存在: ${uploadFilename}`);
       if (isSafeFilename(uploadFilename)) {
-        serveStaticFile(res, fullPath);
+        serveStaticFile(res, fullPath, true); // uploads 图片：长缓存（不可变）
       } else {
         console.log(`[Static] ⚠️ 文件名不安全: "${uploadFilename}"`);
         res.writeHead(400, { 'Content-Type': 'text/plain; charset=utf-8' });

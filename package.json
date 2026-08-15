@@ -1,6 +1,6 @@
 {
   "name": "ibianqian-buglist",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "多人协同 Bug 清单工具",
   "main": "electron/main.js",
   "scripts": {

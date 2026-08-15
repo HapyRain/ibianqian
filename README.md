@@ -76,9 +76,12 @@ npm run build        # electron-builder 打便携 exe → pack/任务清单.exe
 | `public/index.html` | ~610 行 | Vue3 单页模板：启动模式对话框、项目标签栏、任务列表卡片（搜索条+筛选+排序）、备注/粘贴/预览弹窗、小火箭 | 启动对话框、任务列表卡片 |
 | `public/app.js` | ~3300 行 | Vue3 应用逻辑：WS 客户端、身份、多图、备注、备份、搜索、排序、状态动效、手动 FLIP/飞出动画 | `connectWebSocket()`、`handleMessage()` |
 | `public/style.css` | ~2040 行 | 手写样式（CSS 变量 + 响应式 + 动效） | — |
-| `public/themes.js` | ~90 行 | 主题 CSS 生成器（`buildThemeCss`）；主题列表暂空（配色方案待定，实装后在此定义） | `buildThemeCss` |
-| `public/tuner.html` | — | 在线调色台（开发辅助，`/tuner.html`）：iframe 实时预览 + 主题点选（列表暂空待配色）/ 高级微调 / 复制导出 | — |
-| `electron/main.js` | ~250 行 | 托盘、单实例锁、窗口管理、IPC（get-local-ip / write-backup） | `app.whenReady`（213 行） |
+| `public/themes.js` | ~680 行 | **13 套成品主题（6 浅 7 深）** + 主题 CSS 生成器（`buildThemeCss`：17 色变量 + rgb/color-mix 派生 + Element Plus 联动 + 主题专属装饰） | `BUGLIST_THEMES` / `buildThemeCss` |
+| `public/tuner.html` | — | **主题展厅 / 在线调色台**（开发辅助，`/tuner.html`）：iframe 完整预览 13 套主题（含星云/纸纹/代码雨等专属元素）+ 17 色色板详情 + 高级微调 + 复制导出主题对象 | — |
+| `build/icon.ico` | 164KB | **应用图标 7 档**（256/128/64/48/32/24/16，用户设计图 fufu.png 转制），electron-builder 打包用 | — |
+| `public/favicon.ico` | 9.6KB | 浏览器标签页图标（48/32/16） | — |
+| `image/fufu.png` | — | 应用图标源图（用户设计，730×742，供衍生） | — |
+| `electron/main.js` | ~260 行 | 托盘（应用图标）、单实例锁、窗口管理（窗口图标）、IPC（get-local-ip / write-backup） | `app.whenReady` |
 | `electron/preload.js` | 9 行 | contextBridge 暴露 `electronAPI` | — |
 | `electron-builder.yml` | 19 行 | portable 打包配置，默认输出 `pack814/`；打 `pack/` 用 CLI 覆盖 `--config.directories.output=pack` | — |
 | `build/` | — | 7za 代理（C# 源码 + exe + postinstall 脚本）、icon.ico | 坑 1 的固化修复 |
@@ -97,14 +100,15 @@ npm run build        # electron-builder 打便携 exe → pack/任务清单.exe
 |---|---|---|
 | 多项目管理 | 项目标签栏：新建 / 重命名 / 切换 / 删除（至少保留 1 个，删项目连带清理其下所有图片；重命名重名时提示不拦截） | app.js `createTask/switchTask/deleteTask`；server.js `handleCreateTask` 等 |
 | 任务 CRUD | 列表条目（任务）：双击名称内联编辑、状态下拉、删除（长按蓄怒确认） | app.js `addBug/startEditName/deleteBug` |
-| 三态状态 | 待修复 / 修复中 / 已完成，彩色胶囊 + 专属动效（呼吸点 / 扳手拧螺栓 / 电池充电），筛选按钮组带计数 | app.js `onStatusChange/filteredAndSortedBugs`；style.css 状态胶囊 |
+| 三态状态 | 待修复 / 修复中 / 已完成，彩色胶囊 + **圆环体系图标**（待修复=空心圆环、修复中=缺口弧+端点、已完成=圆环+对勾，抽象非实物有设计感）；**静默常态**（图标不动，避免多行重复动画噪音），**状态变化瞬间播一次**（圆环落定/弧转半圈/对勾描边）后归于安静；筛选按钮组带计数 | app.js `onStatusChange/filteredAndSortedBugs`；style.css 状态胶囊 |
 | 组内排序 | 筛选栏末尾排序开关：**倒序**（新任务在最前，默认）/ 正序（新任务在最后），切换时行平滑滑位，偏好存本机（`buglist_sort_desc`） | app.js `sortDesc/toggleSort`；排序依据 `bug.statusChangedAt` |
 | 状态变更动画 | 全部视图：行滑到目标组内位置（手动 FLIP，视口内匀速 + 出屏弹射）；筛选视图：行飞向目标 tag 缩小被吸收，目标计数闪烁 | app.js `flipRowsWithRects` / `flyRowToTag` / `flashStatus` |
-| 多图截图 | 点击 / 拖拽 / Ctrl+V 粘贴 / 整行拖放，支持多选与多张追加，**单条上限 6 张**（前端拦截，非服务端硬约束），单张删除，预览翻页 | app.js `handleImageUpload/deleteImage/openPreview` |
+| 多图截图 | 点击 / 拖拽 / Ctrl+V 粘贴 / 整行拖放，支持多选与多张追加，**单条上限 6 张**（前端拦截，非服务端硬约束），单张删除，预览翻页；**图片区**：牌堆左侧「＋」按钮（无数量徽标——缩略图本就看不全），牌堆宽度随图片数自适应（右缘对齐最后一张卡片）；**uploads 图片长缓存**（文件名唯一不可变 → `Cache-Control: immutable` 一年，二次打开秒开）；**查看器黑屏等图**：打开/翻页先纯黑，图片下载完成（预加载 onload）后一次性放出完整图，杜绝"缩略图放大版→清晰"的闪烁 | app.js `handleImageUpload/deleteImage/openPreview`；server.js `serveStaticFile` |
 | 备注图片 | 项目级/任务级备注可附图（两步式提交），作者可删图，删备注自动清理图片 | app.js `addNoteWithImage/attachNoteImage/updateNoteImage` |
-| 项目拖拽排序 | 标签拖动重排，偏好存本机 localStorage（`buglist_task_order`），不影响他人 | app.js `orderedTasks/onTaskDrop/onTaskDropToEnd` |
+| 项目拖拽排序 | 标签拖动重排，偏好存本机 localStorage（`buglist_task_order`），不影响他人；**切换项目时面板方向感知滑入**（新项目在有序列表右侧→从右滑入，左侧→从左滑入，0.3s 一次性动画，播完静止） | app.js `orderedTasks/onTaskDrop/onTaskDropToEnd`、`switchTask` |
 | 用户身份 | 稳定 clientId（Electron 用 MAC 哈希、浏览器持久化 uuid）+ 显示名，备注显示作者名 | app.js 身份模块；electron `get-mac-id` |
-| 主题切换 | 功能保留（头部调色盘按钮 + 面板），**配色方案待定**——菜单暂不提供选择，讨论定稿后实装；选择存本机 localStorage（`buglist_theme`），不参与服务端同步 | themes.js（`buildThemeCss` 已就绪，主题列表暂空） |
+| 主题切换 | **13 套成品主题（6 浅 7 深）点选即换肤**：暖纸面（默认）/冷灰纸面/豆沙绿/晨雾淡紫/羊皮纸/樱粉晨雾 + One Dark/GitHub Dark/暖棕夜灯/星空蓝/蔷薇暮色/赛博朋克/黑客帝国；**全元素联动**（按钮/状态胶囊/删除蓄怒动画/Element Plus 组件随主题换色，无割裂）；主题带专属质感（星空蓝星云+流星、羊皮纸/冷灰纸面/豆沙绿纸纹、赛博朋克网格+霓虹、黑客帝国代码雨）；**切换带暗色幕布过渡**（纯暗色幕布淡入 → 换肤 → 淡出，全程 ≈1s 有始有终）；**菜单文字统一颜色**（主题名留白，点进去才揭晓配色，保留探知欲）；选择存本机 localStorage（`buglist_theme`），不参与服务端同步 | themes.js（`BUGLIST_THEMES` + `buildThemeCss`） |
+| 应用图标 | 用户设计图（`image/fufu.png`，730×742）本地转多尺寸：`build/icon.ico` 7 档（256/128/64/48/32/24/16，electron-builder 打包用）+ `public/favicon.ico` 3 档（浏览器标签页）；**Electron 托盘与窗口图标也使用 favicon.ico**（原托盘为内存生成色块）；非方形已适配为正方形（LANCZOS） | `build/icon.ico`、`public/favicon.ico`、`electron/main.js` |
 | 服务端数据备份 | 每次写盘节流轮转备份到 `backups/data-*.json`（保留 20 份）；删除类操作前自动快照 `pre-delete-*.json`（保留 5 份） | server.js `backupDataFile` / `snapshotBeforeDelete` |
 | 导出 / 导入 | 头部 ⋮ 菜单：导出 JSON 备份（浏览器下载）；导入 JSON 覆盖（服务端写盘 + 全量广播），引用缺失的图片会提示 | server.js `handleExportData` / `handleImportData`；app.js `exportData` / `onImportFileSelect` |
 | 离线补发 | 断线期间的操作暂存本地队列（上限 50 条），重连后先补发再全量同步 | app.js `pendingQueue` |
@@ -193,6 +197,10 @@ npm run build        # electron-builder 打便携 exe → pack/任务清单.exe
 | 07-14 | 多任务（tasks）+ 双层备注等大改版；`release/`、`pack10/`（Bug清单.exe，均已删） |
 | 07-18 | 启动模式选择 + 客户端本地备份；更名 **任务清单**；`pack14/`（更名后首版，已删）、`pack15/`（保留） |
 | 08-14 | 多图/备注图片/身份/拖拽排序等 6 项改版；`pack814/`（新版产物） |
-| 08-15 | 前端体验改版：总分卡片布局、搜索 + 组内排序（正序/倒序）、状态胶囊动效（呼吸/扳手螺栓/电池充电）、牌堆 6 张、查看器删除、删除动画重写、备注查看/编辑 + 删除确认 + 已修改标记、小火箭回顶、数据备份 + 导出/导入 + 离线补发、术语「项目/任务」；主题配色待定；测试 28/25/51/12 + 模板防线全绿 |
+| 08-15 | 前端体验改版：总分卡片布局、搜索 + 组内排序（正序/倒序）、状态胶囊动效（呼吸/扳手螺栓/电池充电）、牌堆 6 张、查看器删除、删除动画重写、备注查看/编辑 + 删除确认 + 已修改标记、小火箭回顶、数据备份 + 导出/导入 + 离线补发、术语「项目/任务」；测试 28/25/51/12 + 模板防线全绿 |
+| 08-15 | **主题实装**：13 套成品主题（6 浅 7 深）——10 位子 Agent 并行设计 + 程序化验收（对比度/纯白纯黑/字段合法性）后合入；全元素联动换肤（按钮/状态胶囊/删除蓄怒动画/Element Plus），星空蓝含星云闪烁+毛玻璃新玩法；调色台升级为主题展厅（/tuner.html） |
+| 08-15 | 主题增量：星空蓝星星优化（减少变大变柔、闪烁收窄、语法保守化）+ 流星；冷灰纸面加纸纹；新增 樱粉晨雾/蔷薇暮色（唯美粉）/赛博朋克（网格+霓虹） |
+| 08-15 | 主题调整：删除 墨玉绿；新增 黑客帝国（三列代码雨 + 淡网格 + 霓虹绿 glow） |
+| 08-15 | 主题切换动效（暗色幕布 + 面板渐隐关闭）、状态图标圆环体系（静默/变化瞬间反馈）、图片区简化（＋左侧 + 自适应宽度）、查看器黑屏等图 + uploads 长缓存、项目切换方向滑入、备注弹窗防御修复、**应用图标实装**（fufu.png → 多尺寸 ICO）、主题菜单文字统一颜色——**主题/图标定稿** |
 
 > 旧产物目录（dist/release/pack10-14）与 pack.zip 已于 2026-07-18 清理删除；`pack15/`、`pack814/` 为历史产物，当前输出 `pack/`。
