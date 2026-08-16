@@ -670,6 +670,21 @@ body {
 /* ============================================================
    名称单元格
    ============================================================ */
+.bug-name{flex:1;min-width:180px}
+/* 负责人 hover 标签（0.3 体验小点）：平时隐藏不"公示"，悬停行时淡入浮出（名称上方）；
+   边框/淡底 = getNoteColor 个人色（颜色即人，与备注作者同族）；静默常态，仅 hover 淡入 0.15s */
+.assignee-tag{
+  position:absolute;left:12px;top:-12px;z-index:10;pointer-events:none;
+  display:inline-flex;align-items:center;gap:5px;
+  font-size:11px;font-weight:600;line-height:1;white-space:nowrap;
+  padding:4px 9px;border-radius:999px;
+  background:color-mix(in srgb, var(--assignee-color) 12%, var(--surface));
+  border:1px solid color-mix(in srgb, var(--assignee-color) 55%, transparent);
+  color:var(--text);
+  box-shadow:0 3px 8px rgba(var(--text-rgb), .14);
+  opacity:0;transition:opacity .15s ease;
+}
+.bug-row:hover .assignee-tag{opacity:1}
 .name-text {
   display: inline-block;
   padding: 4px 8px;
@@ -1791,9 +1806,8 @@ body {
 /* 计数徽标闪烁（状态移动完成后的反馈涟漪） */
 .filter-flash{animation:countFlash .7s ease}
 @keyframes countFlash{0%{box-shadow:0 0 0 0 rgba(var(--primary-rgb),.5)}70%{box-shadow:0 0 0 9px rgba(var(--primary-rgb),0)}100%{box-shadow:0 0 0 0 rgba(var(--primary-rgb),0)}}
-.bug-row{display:flex;align-items:center;gap:10px;background:var(--surface);border:1px solid var(--line-soft);border-radius:11px;padding:9px 12px;min-height:44px;box-shadow:var(--shadow-card);transition:height .32s cubic-bezier(.3,.9,.35,1), opacity .2s ease, box-shadow .2s ease}
+.bug-row{position:relative;display:flex;align-items:center;gap:10px;background:var(--surface);border:1px solid var(--line-soft);border-radius:11px;padding:9px 12px;min-height:44px;box-shadow:var(--shadow-card);transition:height .32s cubic-bezier(.3,.9,.35,1), opacity .2s ease, box-shadow .2s ease}
 .bug-row:hover{background:var(--surface-hi);box-shadow:var(--shadow-hover)}
-.bug-name{flex:1;min-width:180px}
 .bug-status{width:120px;flex:none}
 .bug-shots{flex:none;display:flex;align-items:center;gap:6px;position:relative}
 .bug-shots.drag-over{outline:2px dashed var(--primary);outline-offset:-2px;border-radius:8px}
@@ -1820,6 +1834,105 @@ body {
 }
 .bug-shots .shot-add-more:hover{transform:translateY(-1px) scale(1.08);box-shadow:0 4px 12px rgba(var(--primary-rgb),.55)}
 .bug-row-spotlight{position:relative;z-index:1700;border-radius:10px;box-shadow:0 0 0 4px rgba(255,255,255,.65), 0 4px 18px rgba(var(--text-rgb),.28)}
+
+/* ============================================================
+   新增任务"下一步"面板（deadline / 备注询问，0.3 体验小点）
+   动效：入场/出场/勾选展开全部 0.25s、同一缓动 cubic-bezier(.3,.9,.35,1)
+   —— 挂载/展开用纯 CSS animation（不用 Vue transition 双帧），出场播完由 animationend 清状态
+   ============================================================ */
+.next-step{
+  position:absolute;left:12px;top:calc(100% + 8px);z-index:1750;
+  width:288px;padding:12px 14px 10px;
+  background:var(--surface-hi);
+  border:1px solid var(--line);
+  border-radius:12px;
+  box-shadow:var(--shadow-dialog);
+  animation:nextStepIn .25s cubic-bezier(.3,.9,.35,1);
+}
+@keyframes nextStepIn{
+  from{opacity:0;transform:translateY(-8px)}
+  to{opacity:1;transform:translateY(0)}
+}
+.next-step-closing{
+  animation:nextStepOut .25s cubic-bezier(.3,.9,.35,1) forwards;
+  pointer-events:none;
+}
+@keyframes nextStepOut{
+  from{opacity:1;transform:translateY(0)}
+  to{opacity:0;transform:translateY(-6px)}
+}
+.ns-title{font-size:12px;color:var(--text-2);margin-bottom:8px}
+.ns-opt{
+  display:flex;align-items:center;gap:8px;
+  padding:6px 8px;margin:0 -8px;border-radius:8px;
+  font-size:13px;color:var(--text);cursor:pointer;user-select:none;
+  transition:background .25s cubic-bezier(.3,.9,.35,1);
+}
+.ns-opt:hover{background:rgba(var(--primary-rgb),.08)}
+.ns-check{
+  width:16px;height:16px;flex:none;border-radius:5px;
+  border:1.5px solid var(--line);background:var(--surface);
+  display:inline-flex;align-items:center;justify-content:center;
+  color:var(--text-inverse);
+  transition:border-color .25s cubic-bezier(.3,.9,.35,1), background .25s cubic-bezier(.3,.9,.35,1);
+}
+.ns-check svg{width:10px;height:10px;opacity:0;transition:opacity .2s ease}
+.ns-opt.on .ns-check{background:var(--primary);border-color:var(--primary)}
+.ns-opt.on .ns-check svg{opacity:1}
+.ns-body{
+  margin:2px 0 6px 24px;
+  animation:nsBodyIn .25s cubic-bezier(.3,.9,.35,1);
+}
+@keyframes nsBodyIn{
+  from{opacity:0;transform:translateY(-4px)}
+  to{opacity:1;transform:translateY(0)}
+}
+/* deadline 行：时间选择器 + "此刻"按钮（此刻=评估工时，非立即完成） */
+.ns-picker-row{display:flex;align-items:center;gap:8px}
+.ns-picker-row .el-date-picker{flex:1;min-width:0}
+.ns-picker-row .el-date-picker .el-input__wrapper{box-shadow:0 0 0 1px var(--line) inset;background:var(--surface)}
+/* 隐藏 el-date-picker 内置"此刻"（点击=选中当前并收起，语义错误）；用 .ns-now 走工时评估。
+   面板 teleport 到 body，故用 popper-class 精准定位 */
+.ns-picker-popper .el-picker-panel__link-btn{display:none}
+.ns-now{
+  flex:none;border:1px solid var(--primary-line);background:var(--primary-soft);color:var(--primary);
+  font-size:12px;font-weight:600;padding:6px 12px;border-radius:8px;cursor:pointer;white-space:nowrap;
+  transition:transform .25s cubic-bezier(.3,.9,.35,1), box-shadow .25s cubic-bezier(.3,.9,.35,1), background .25s cubic-bezier(.3,.9,.35,1);
+}
+.ns-now:hover{background:var(--primary);color:var(--text-inverse);box-shadow:0 3px 8px rgba(var(--primary-rgb),.3)}
+.ns-now:active{transform:scale(.95);transition-duration:.08s}
+/* 工时评估浮层（面板内覆盖；入场/出场 0.25s 同缓动） */
+.ns-hours{position:absolute;inset:0;z-index:6;border-radius:12px;background:rgba(28,26,23,.4);display:flex;align-items:center;justify-content:center;animation:nsHoursIn .25s cubic-bezier(.3,.9,.35,1)}
+.ns-hours-closing{animation:nsHoursOut .25s cubic-bezier(.3,.9,.35,1) forwards;pointer-events:none}
+@keyframes nsHoursIn{from{opacity:0}to{opacity:1}}
+@keyframes nsHoursOut{from{opacity:1}to{opacity:0}}
+.ns-hours-box{background:var(--surface-hi);border:1px solid var(--line);border-radius:12px;padding:16px 18px;box-shadow:var(--shadow-dialog);text-align:center;min-width:208px}
+.ns-hours-title{font-size:13px;font-weight:600;color:var(--text);margin-bottom:12px}
+.ns-hours-opts{display:flex;gap:8px;justify-content:center;margin-bottom:12px}
+.ns-hours-day{
+  border:1px solid var(--line);background:var(--surface);color:var(--text);
+  font-size:12.5px;font-weight:600;padding:7px 12px;border-radius:9px;cursor:pointer;
+  transition:transform .25s cubic-bezier(.3,.9,.35,1), background .25s cubic-bezier(.3,.9,.35,1), border-color .25s cubic-bezier(.3,.9,.35,1), color .25s cubic-bezier(.3,.9,.35,1);
+}
+.ns-hours-day:hover{border-color:var(--primary);background:var(--primary-soft);color:var(--primary);transform:translateY(-1px)}
+.ns-hours-day:active{transform:scale(.94);transition-duration:.08s}
+.ns-hours-cancel{border:none;background:transparent;color:var(--text-2);font-size:12px;cursor:pointer;padding:4px 10px;border-radius:7px;transition:color .25s cubic-bezier(.3,.9,.35,1), background .25s cubic-bezier(.3,.9,.35,1)}
+.ns-hours-cancel:hover{color:var(--text);background:rgba(var(--text-rgb),.06)}
+.ns-actions{display:flex;justify-content:flex-end;align-items:center;gap:10px;margin-top:10px}
+.ns-skip{
+  border:none;background:transparent;color:var(--text-2);font-size:12.5px;
+  padding:5px 10px;border-radius:8px;cursor:pointer;
+  transition:color .25s cubic-bezier(.3,.9,.35,1), background .25s cubic-bezier(.3,.9,.35,1);
+}
+.ns-skip:hover{color:var(--text);background:rgba(var(--text-rgb),.06)}
+.ns-ok{
+  border:none;background:var(--primary);color:var(--text-inverse);font-size:12.5px;font-weight:600;
+  padding:6px 18px;border-radius:9px;cursor:pointer;
+  box-shadow:0 2px 6px rgba(var(--primary-rgb),.25);
+  transition:transform .25s cubic-bezier(.3,.9,.35,1), box-shadow .25s cubic-bezier(.3,.9,.35,1);
+}
+.ns-ok:hover{transform:translateY(-1px);box-shadow:0 4px 10px rgba(var(--primary-rgb),.32)}
+.ns-ok:active{transform:translateY(1px) scale(.97);box-shadow:0 1px 2px rgba(var(--primary-rgb),.2);transition-duration:.08s}
 /* 删除收起：行高/内边距/边框同步过渡到 0，margin-bottom 抵消 .bug-list 的 gap:7px，下方行自然平滑上移覆盖，移除时零跳变 */
 .bug-row-dying{overflow:hidden;height:0 !important;min-height:0 !important;padding-top:0 !important;padding-bottom:0 !important;border-top-width:0 !important;border-bottom-width:0 !important;margin-bottom:-7px !important;transition:height .28s cubic-bezier(.3,.9,.35,1), min-height .28s cubic-bezier(.3,.9,.35,1), padding-top .28s cubic-bezier(.3,.9,.35,1), padding-bottom .28s cubic-bezier(.3,.9,.35,1), border-top-width .28s cubic-bezier(.3,.9,.35,1), border-bottom-width .28s cubic-bezier(.3,.9,.35,1), margin-bottom .28s cubic-bezier(.3,.9,.35,1)}
 /* 删除渐隐（仅剩一行时）：直接淡出，不收起 */
@@ -1861,6 +1974,10 @@ body {
 .pv-del:hover{background:var(--danger);transform:scale(1.06)}
 /* ElMessage 提示必须浮在查看器黑幕（2101）之上，否则查看器内删除成功后提示被遮住看不清 */
 .el-message{z-index:2200 !important}
+/* 深夜彩蛋语录（0.3 收尾）：复用 ElMessage 小提示样式，内容稍大加粗；背景/文字随主题（themes.js dark 分支已有 .el-message 覆盖） */
+.late-night-toast .el-message__content{font-size:13.5px;font-weight:600;line-height:1.6;letter-spacing:.2px}
+/* 去掉 ElMessage 默认的 info 图标（语录文案自带 emoji，系统图标多余） */
+.late-night-toast .el-message__icon{display:none}
 /* 查看器内删除确认（居中浮层，盖住舞台其余控件） */
 .pv-confirm{position:absolute;inset:0;z-index:10;display:flex;align-items:center;justify-content:center;background:rgba(28,26,23,.5)}
 /* 确认框渐隐入场/退场（与删除成功提示的入场/退场节奏一致） */

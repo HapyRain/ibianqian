@@ -176,6 +176,11 @@
         }
       }
 
+      /** 兜底固定色板（主题派生色板不可用时使用；正常由当前主题 primary 派生，随主题联动） */
+      const FALLBACK_NOTE_COLORS = ['#e6a23c', '#409eff', '#67c23a', '#f56c6c', '#9b59b6', '#1abc9c'];
+      /** 当前主题派生色板（applyTheme 时同步更新：负责人 hover 标签 / 备注作者色点共用） */
+      let notePalette = null;
+
       /**
        * 应用主题：注入 <style id="theme-style">（CSS 变量 + 结构性覆盖），立即生效并持久化选择
        */
@@ -188,6 +193,10 @@
         let st = document.getElementById('theme-style');
         if (!st) { st = document.createElement('style'); st.id = 'theme-style'; document.head.appendChild(st); }
         st.textContent = window.buildThemeCss(t);
+        // 同步 JS 侧主题和谐色板（与 buildThemeCss 同源派生）：负责人/备注作者色随主题联动
+        if (typeof window.deriveNotePalette === 'function' && t.vars && t.vars.primary) {
+          notePalette = window.deriveNotePalette(t.vars.primary);
+        }
       }
 
       /** 改造幕布层（复用节点） */
@@ -1431,8 +1440,39 @@
         });
       }
 
+      // ==================== 深夜彩蛋（0.3 收尾）：正向推进状态 + 20:00-05:00 → 弹一句安慰 ====================
+
+      /** 深夜语录池（随机一条；emoji 开头，暖而不油） */
+      const LATE_NIGHT_QUOTES = [
+        '🌙 这么晚还在认真工作，你真的超棒！',
+        '🌃 深夜赶工辛苦了，改完这一条就早点休息吧～',
+        '⭐ 夜里走的一小步，都是明天的一大步。加油！',
+        '✨ 凌晨的努力不会被辜负，加油！',
+        '☕ 夜深了，喝口热水缓一缓，别太拼啦。',
+        '🔥 深夜还能保持状态，这就是你的实力！',
+      ];
+
+      /**
+       * 深夜彩蛋：状态正向推进（待修复→修复中 / 修复中→已完成）且当前时间在 20:00-次日 05:00 之间时，
+       * 弹一句安慰/励志语录。复用 ElMessage 小提示样式（右上角、不打断操作、4.5s 自动消失、主题联动）。
+       */
+      function maybeLateNightCheer(oldStatus, newStatus) {
+        const forward = (oldStatus === '待修复' && newStatus === '修复中') || (oldStatus === '修复中' && newStatus === '已完成');
+        if (!forward) return;
+        const hour = new Date().getHours();
+        if (!(hour >= 20 || hour < 5)) return;
+        const quote = LATE_NIGHT_QUOTES[Math.floor(Math.random() * LATE_NIGHT_QUOTES.length)];
+        ElementPlus.ElMessage({
+          message: Vue.h('div', { class: 'late-night-msg' }, quote),
+          duration: 4500,
+          showClose: false,
+          customClass: 'late-night-toast',
+        });
+      }
+
       function onStatusChange(bug, newStatus) {
         if (bug.status === newStatus) return;
+        maybeLateNightCheer(bug.status, newStatus); // 深夜彩蛋（只在自己操作时触发，随广播不重复弹）
 
         // 筛选视图：飞向目标 tag
         const rowEl = document.querySelector('.bug-row[data-bug-id="' + bug.id + '"]');
@@ -1492,12 +1532,16 @@
 
       /**
        * 完成编辑名称
+       * @param {object} bug
+       * @param {boolean} [openNext] 回车确认时 true：标题提交后引出"下一步"小面板（deadline / 备注询问）
+       *                            blur 失焦提交不引（安静路径，用户已移开焦点）
        */
-      function finishEditName(bug) {
+      function finishEditName(bug, openNext) {
         editingBugId.value = null;
-        // 值无变化则跳过
+        // 值无变化则跳过（含空标题直接回车：不提交也不引面板）
         if (bug.name === editNameBackup) return;
         sendUpdate(bug.id, 'name', bug.name);
+        if (openNext && bug.name.trim()) openNextStep(bug);
       }
 
       /**
@@ -1518,12 +1562,15 @@
           return;
         }
 
+        // 负责人自动归属（0.3 体验小点）：谁新建的就是谁的；名字未填时只存 clientId（显示层兜底"我"/clientId 前缀，与备注作者一致）
+        const assigneeName = displayName.value.trim();
         const newBug = {
           id: randomUUID(),
           name: '',
           status: '待修复',
           images: [],
           statusChangedAt: Date.now(), // 组内排序依据：新来的往组末尾
+          assignee: { clientId: clientId, name: assigneeName || null },
         };
 
         task.bugs.push(newBug);
@@ -1546,6 +1593,105 @@
         nextTick(() => {
           startEditName(newBug);
         });
+      }
+
+      // ==================== 新增任务"下一步"小面板（0.3 体验小点：deadline / 备注询问） ====================
+
+      /** 正在显示"下一步"面板的任务行 id（null = 无） */
+      const nextStepBugId = ref(null);
+      /** 面板：是否勾选 deadline（勾选展开时间选择器） */
+      const nsDeadlineOn = ref(false);
+      /** 面板：已选 deadline 时间戳（毫秒） */
+      const nsDeadline = ref(null);
+      /** 面板：是否勾选备注（勾选展开输入框） */
+      const nsNoteOn = ref(false);
+      /** 面板：备注文本 */
+      const nsNoteText = ref('');
+      /** 面板：出场动画进行中（关闭时先播动画再清状态） */
+      const nsClosing = ref(false);
+      /** 工时评估浮层：可见 / 出场动画中 */
+      const nsHoursVisible = ref(false);
+      const nsHoursClosing = ref(false);
+
+      /** 打开"下一步"面板（重置状态；行内回车确认标题后调用） */
+      function openNextStep(bug) {
+        nsClosing.value = false;
+        nsDeadlineOn.value = false;
+        nsDeadline.value = null;
+        nsNoteOn.value = false;
+        nsNoteText.value = '';
+        nextStepBugId.value = bug.id;
+      }
+
+      /** 关闭"下一步"面板：加出场动画类（0.25s），animationend 后清状态 */
+      function closeNextStep() {
+        if (nextStepBugId.value === null) return;
+        nsClosing.value = true;
+      }
+
+      /** 面板出场动画结束（入场动画结束也会触发，但此时 nsClosing=false 不清理，安全） */
+      function onNextStepAnimEnd() {
+        if (nsClosing.value) {
+          nextStepBugId.value = null;
+          nsClosing.value = false;
+        }
+      }
+
+      /**
+       * 打开工时评估浮层（点"此刻"）：deadline 不可能等于现在，改为评估所需工时
+       */
+      function openHoursPicker() {
+        nsHoursVisible.value = true;
+      }
+
+      /**
+       * 选择所需天数：deadline = 当前时间 + N 天（保留钟点），自动填好并收起浮层
+       * @param {number} days 1-5
+       */
+      function applyHoursDays(days) {
+        nsDeadline.value = Date.now() + days * 24 * 60 * 60 * 1000;
+        closeHoursPicker();
+      }
+
+      /** 收起工时评估浮层（先播出场动画，animationend 后清状态） */
+      function closeHoursPicker() {
+        if (!nsHoursVisible.value) return;
+        nsHoursClosing.value = true;
+      }
+
+      /** 工时评估浮层出场动画结束（入场动画结束也会触发，nsHoursClosing=false 不清理，安全） */
+      function onHoursAnimEnd() {
+        if (nsHoursClosing.value) {
+          nsHoursVisible.value = false;
+          nsHoursClosing.value = false;
+        }
+      }
+
+      /**
+       * 格式化 deadline 时间戳 → "YYYY-MM-DD HH:mm"（备注文案用）
+       */
+      function formatDeadline(ts) {
+        if (typeof ts !== 'number') return '';
+        const d = new Date(ts);
+        const p = (n) => String(n).padStart(2, '0');
+        return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+      }
+
+      /**
+       * 面板"确定"：按勾选落库
+       * - deadline 勾选且已选时间 → bug.deadline 结构化字段（update 广播，未来逾期/排序可用）+ 自动代发一条备注
+       * - 备注勾选且有内容 → 发一条备注
+       */
+      function confirmNextStep(bug) {
+        if (nsDeadlineOn.value && typeof nsDeadline.value === 'number') {
+          bug.deadline = nsDeadline.value;
+          sendUpdate(bug.id, 'deadline', nsDeadline.value);
+          pushBugNote(bug, '该任务启用 deadline：' + formatDeadline(nsDeadline.value));
+        }
+        if (nsNoteOn.value && nsNoteText.value.trim()) {
+          pushBugNote(bug, nsNoteText.value.trim());
+        }
+        closeNextStep();
       }
 
       /**
@@ -2110,20 +2256,28 @@
         return !!(note && note.createdAt && note.updatedAt && note.updatedAt > note.createdAt + 1000);
       }
 
-      /** 备注作者颜色调色板 */
-      const NOTE_COLORS = ['#e6a23c', '#409eff', '#67c23a', '#f56c6c', '#9b59b6', '#1abc9c'];
-
       /**
-       * 根据 clientId 返回一个稳定的颜色
+       * 根据 clientId 返回一个稳定的颜色（当前主题和谐色板；主题切换后颜色随之变化，与负责人 hover 标签同源）
        */
       function getNoteColor(clientId) {
-        if (!clientId) return NOTE_COLORS[0];
+        const palette = notePalette || FALLBACK_NOTE_COLORS;
+        if (!clientId) return palette[0];
         let hash = 0;
         for (let i = 0; i < clientId.length; i++) {
           hash = ((hash << 5) - hash) + clientId.charCodeAt(i);
           hash |= 0;
         }
-        return NOTE_COLORS[Math.abs(hash) % NOTE_COLORS.length];
+        return palette[Math.abs(hash) % palette.length];
+      }
+
+      /**
+       * 负责人显示名（0.3）：优先存的名字快照；未填名字时自己显示"我"、他人显示 clientId 前 8 位（与备注作者兜底一致）
+       */
+      function assigneeLabel(bug) {
+        const a = bug?.assignee;
+        if (!a || !a.clientId) return '';
+        if (a.name) return a.name;
+        return a.clientId === clientId ? '我' : a.clientId.substring(0, 8);
       }
 
       // ==================== 任务备注操作 ====================
@@ -2149,6 +2303,29 @@
         bugNotesTaskId.value = taskId;
         bugNotesBugId.value = bugId;
         bugNotesVisible.value = true;
+      }
+
+      /**
+       * 发送一条任务级备注（公共路径：备注弹窗 / 新增任务"下一步"面板共用）
+       * 本地立即追加 + WS addBugNote 广播；作者 = 当前用户；无图
+       * @param {object} bug
+       * @param {string} content
+       */
+      function pushBugNote(bug, content) {
+        if (!bug || !content || !content.trim()) return;
+        const task = currentTask.value;
+        if (!task) return;
+        if (!bug.notes) bug.notes = [];
+        const note = {
+          id: randomUUID(),
+          clientId: clientId,
+          content: content.trim(),
+          createdAt: Date.now(), // 创建时间锚点（判断"已修改"）
+          updatedAt: Date.now(),
+          authorName: displayName.value.trim() || null,
+        };
+        bug.notes.push(note);
+        sendMessage({ type: 'addBugNote', clientId, data: { taskId: task.id, bugId: bug.id, note } });
       }
 
       /**
@@ -3326,6 +3503,25 @@
         startEditName,
         finishEditName,
         cancelEditName,
+
+        // 新增任务"下一步"面板（deadline / 备注询问）
+        nextStepBugId,
+        nsDeadlineOn,
+        nsDeadline,
+        nsNoteOn,
+        nsNoteText,
+        nsClosing,
+        nsHoursVisible,
+        nsHoursClosing,
+        openNextStep,
+        closeNextStep,
+        confirmNextStep,
+        onNextStepAnimEnd,
+        openHoursPicker,
+        applyHoursDays,
+        closeHoursPicker,
+        onHoursAnimEnd,
+        formatDeadline,
         addBug,
         deleteBug,
         onDelDown,
@@ -3356,6 +3552,7 @@
         // 任务备注方法
         getNoteWriters,
         getNoteColor,
+        assigneeLabel,
         openNotesDialog,
         editingTaskNoteId,
         startEditTaskNote,

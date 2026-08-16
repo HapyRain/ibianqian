@@ -211,9 +211,11 @@
           class="bug-row"
           :class="{ 'bug-row-spotlight': confirmBugId === bug.id, 'bug-row-dying': dyingBugId === bug.id, 'bug-row-fade': fadingBugId === bug.id, 'row-enter': enteringBugId === bug.id }"
         >
+          <!-- 负责人 hover 标签（0.3 体验小点）：平时隐藏不"公示"，悬停行时淡入浮出——小团队收敛，划过去知道是谁就行；颜色 = getNoteColor(clientId) 个人色，与备注作者同族 -->
+          <span v-if="bug.assignee && bug.assignee.clientId" class="assignee-tag" :style="{ '--assignee-color': getNoteColor(bug.assignee.clientId) }">{{ assigneeLabel(bug) }}</span>
           <div class="bug-cell bug-name" @dblclick="startEditName(bug)">
             <el-input v-if="editingBugId === bug.id" :model-value="bug.name" @update:model-value="bug.name = $event"
-              size="small" placeholder="请输入任务名称" @blur="finishEditName(bug)" @keyup.enter="finishEditName(bug)" @keyup.escape="cancelEditName(bug)" ></el-input>
+              size="small" placeholder="请输入任务名称" @blur="finishEditName(bug)" @keyup.enter="finishEditName(bug, true)" @keyup.escape="cancelEditName(bug)" ></el-input>
             <span v-else class="name-text" :class="{ 'name-placeholder': !bug.name }">{{ bug.name || '双击编辑名称...' }}</span>
           </div>
           <div class="bug-cell bug-shots" @dragover="onDragOver" @dragleave="onDragLeave" @drop="onDrop($event, bug.id)">
@@ -273,6 +275,41 @@
               <button class="ok" @click.stop="confirmDeleteBug(bug)">确认删除</button>
               <button class="no" @click.stop="cancelDeleteConfirm()">取消</button>
             </span>
+          </div>
+          <!-- 新增任务"下一步"面板（回车确认标题后引出：deadline / 备注询问；勾选即展开对应输入；跳过/确定收场；入场/出场 0.25s 统一） -->
+          <div v-if="nextStepBugId === bug.id" class="next-step" :class="{ 'next-step-closing': nsClosing }" @animationend="onNextStepAnimEnd">
+            <div class="ns-title">任务已创建，是否补充？</div>
+            <div class="ns-opt" :class="{ on: nsDeadlineOn }" @click="nsDeadlineOn = !nsDeadlineOn">
+              <span class="ns-check"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></span>
+              <span class="ns-opt-label">设置 deadline</span>
+            </div>
+            <div v-if="nsDeadlineOn" class="ns-body">
+              <div class="ns-picker-row">
+                <el-date-picker v-model="nsDeadline" type="datetime" placeholder="选择截止时间" format="YYYY-MM-DD HH:mm" value-format="x" size="small" popper-class="ns-picker-popper" :clearable="false" :editable="false"></el-date-picker>
+                <button class="ns-now" @click="openHoursPicker()">此刻</button>
+              </div>
+            </div>
+            <div class="ns-opt" :class="{ on: nsNoteOn }" @click="nsNoteOn = !nsNoteOn">
+              <span class="ns-check"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></span>
+              <span class="ns-opt-label">添加备注</span>
+            </div>
+            <div v-if="nsNoteOn" class="ns-body">
+              <el-input v-model="nsNoteText" placeholder="写点什么…" size="small" @keyup.enter.stop="confirmNextStep(bug)"></el-input>
+            </div>
+            <div class="ns-actions">
+              <button class="ns-skip" @click="closeNextStep()">跳过</button>
+              <button class="ns-ok" @click="confirmNextStep(bug)">确定</button>
+            </div>
+            <!-- 工时评估浮层（点"此刻"弹出：deadline 不可能=现在，按所需工时自动算好日期；入场/出场 0.25s 同缓动） -->
+            <div v-if="nsHoursVisible" class="ns-hours" :class="{ 'ns-hours-closing': nsHoursClosing }" @animationend="onHoursAnimEnd" @click.self="closeHoursPicker()">
+              <div class="ns-hours-box">
+                <div class="ns-hours-title">请评估所需工时 🌙</div>
+                <div class="ns-hours-opts">
+                  <button v-for="d in [1,2,3,4,5]" :key="d" class="ns-hours-day" @click="applyHoursDays(d)">{{ d }} 天</button>
+                </div>
+                <button class="ns-hours-cancel" @click="closeHoursPicker()">取消</button>
+              </div>
+            </div>
           </div>
         </div>
         </TransitionGroup>

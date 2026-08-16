@@ -353,12 +353,68 @@
   ];
 
   /**
+   * #RRGGBB → [h, s, l]（h∈[0,360), s/l∈[0,100]）
+   */
+  function hexToHsl(hex) {
+    var n = parseInt(hex.slice(1), 16);
+    var r = ((n >> 16) & 255) / 255, g = ((n >> 8) & 255) / 255, b = (n & 255) / 255;
+    var max = Math.max(r, g, b), min = Math.min(r, g, b);
+    var h = 0, s = 0, l = (max + min) / 2;
+    if (max !== min) {
+      var d = max - min;
+      s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+      if (max === r) h = (g - b) / d + (g < b ? 6 : 0);
+      else if (max === g) h = (b - r) / d + 2;
+      else h = (r - g) / d + 4;
+      h *= 60;
+    }
+    return [h, s * 100, l * 100];
+  }
+
+  /**
+   * [h, s, l] → #RRGGBB
+   */
+  function hslToHex(h, s, l) {
+    h = ((h % 360) + 360) % 360;
+    s /= 100; l /= 100;
+    var c = (1 - Math.abs(2 * l - 1)) * s;
+    var x = c * (1 - Math.abs(((h / 60) % 2) - 1));
+    var m = l - c / 2;
+    var r = 0, g = 0, b = 0;
+    if (h < 60) { r = c; g = x; }
+    else if (h < 120) { r = x; g = c; }
+    else if (h < 180) { g = c; b = x; }
+    else if (h < 240) { g = x; b = c; }
+    else if (h < 300) { r = x; b = c; }
+    else { r = c; b = x; }
+    var to = function (v) { return Math.round((v + m) * 255).toString(16).padStart(2, '0'); };
+    return '#' + to(r) + to(g) + to(b);
+  }
+
+  /**
+   * 由主题主色派生 6 个「主题和谐强调色」（负责人 hover 标签 / 备注作者色点共用色板）：
+   * 保持主色的亮度、饱和度压到 ≤70%（避免高饱和主色旋转出荧光感），色相围绕主色旋转错开；
+   * 保证同一主题内多人颜色可辨、整体柔和随主题联动（不再全局固定一套色）。
+   */
+  function deriveNotePalette(primaryHex) {
+    var hsl = hexToHsl(primaryHex);
+    var h = hsl[0], s = Math.min(hsl[1], 70), l = hsl[2];
+    var offsets = [0, -48, 48, -100, 100, 165];
+    return offsets.map(function (off) {
+      return hslToHex(h + off, s, l);
+    });
+  }
+
+  /**
    * #RRGGBB → "r,g,b" 逗号三元组（供 rgba(var(--xxx-rgb), a) 使用）
    */
   function rgbTriplet(hex) {
     var n = parseInt(hex.slice(1), 16);
     return ((n >> 16) & 255) + ',' + ((n >> 8) & 255) + ',' + (n & 255);
   }
+
+  /** 供 app.js 在主题切换时同步派生 JS 侧色板（与 buildThemeCss 同源） */
+  window.deriveNotePalette = deriveNotePalette;
 
   /**
    * 由主题对象生成完整 CSS（变量 + 派生色 + Element Plus 联动 + 结构性覆盖 + 深色增强 + extra）
@@ -390,6 +446,11 @@
 
     /* ---- color-mix 软色（淡化底 / 描边 / 加深，主题联动） ---- */
     css += '--primary-soft:color-mix(in srgb,var(--primary) 13%,var(--surface));';
+
+    /* ---- 主题和谐强调色（负责人 hover 标签 / 备注作者色点色板，随主题联动） ---- */
+    var notePal = deriveNotePalette(v.primary);
+    css += '--note-c1:' + notePal[0] + ';--note-c2:' + notePal[1] + ';--note-c3:' + notePal[2] + ';';
+    css += '--note-c4:' + notePal[3] + ';--note-c5:' + notePal[4] + ';--note-c6:' + notePal[5] + ';';
     css += '--primary-line:color-mix(in srgb,var(--primary) 22%,transparent);';
     css += '--primary-deep:color-mix(in srgb,var(--primary) 82%,#000);';
     css += '--danger-soft:color-mix(in srgb,var(--danger) 9%,var(--surface-hi));';

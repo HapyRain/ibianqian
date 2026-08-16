@@ -8,7 +8,8 @@ const { WebSocketServer } = require('ws');
 // ================================================================
 // 1. 配置常量
 // ================================================================
-const INITIAL_PORT = 3050;
+// 起始端口（环境变量 BUGLIST_PORT 可覆盖：自动化验证用独立端口，避免与运行中服务冲突；3050 被占时自动 +1 探测到 3070）
+const INITIAL_PORT = Number(process.env.BUGLIST_PORT) || 3050;
 const MAX_PORT = 3070;
 const BIND_ADDR = '0.0.0.0';
 
@@ -357,9 +358,11 @@ async function handleUpdate(ws, msg, _wss) {
 
   // 字段白名单 + 值校验（放在 updateData 之前，尽早 return，避免无谓进锁）
   // 'name' 允许空字符串（清空名称）；图片生命周期改由 upload/removeImage/DELETE 端点管理，'image' 不再走 update
-  if (!['name', 'status'].includes(field)) return;
+  if (!['name', 'status', 'deadline'].includes(field)) return;
   if (field === 'name' && typeof value !== 'string') return;
   if (field === 'status' && !ALLOWED_STATUSES.includes(value)) return;
+  // deadline（0.3 体验小点）：仅接受时间戳 number（毫秒）或 null（清除）；非法值一律拒绝
+  if (field === 'deadline' && !(typeof value === 'number' && Number.isFinite(value)) && value !== null) return;
 
   const result = await updateData((data) => {
     const { bug } = findBugInTasks(data.tasks, taskId, bugId);
@@ -424,6 +427,16 @@ async function handleAdd(ws, msg, _wss) {
     // 归一化：确保 images 字段为数组（旧客户端 add 不带 images）；statusChangedAt 缺省为当前时间
     const normalizedBug = { ...bug, images: Array.isArray(bug.images) ? bug.images : [] };
     if (typeof normalizedBug.statusChangedAt !== 'number') normalizedBug.statusChangedAt = Date.now();
+    // assignee 归一化（0.3 负责人）：只接受 { clientId: string, name: string|null }，非法值（含非对象）显式删除，杜绝脏数据入库
+    if (bug.assignee && typeof bug.assignee === 'object' && typeof bug.assignee.clientId === 'string' && bug.assignee.clientId) {
+      normalizedBug.assignee = { clientId: bug.assignee.clientId, name: typeof bug.assignee.name === 'string' ? bug.assignee.name : null };
+    } else {
+      delete normalizedBug.assignee;
+    }
+    // deadline 归一化（0.3 体验小点）：仅保留合法时间戳 number（毫秒），其余（含 null/字符串）显式删除
+    if (!(typeof bug.deadline === 'number' && Number.isFinite(bug.deadline))) {
+      delete normalizedBug.deadline;
+    }
     task.bugs.push(normalizedBug);
     return { type: 'add', taskId, bug: { ...normalizedBug } };
   });
@@ -1497,6 +1510,12 @@ function normalizeBugForImport(b) {
     images: Array.isArray(b.images) ? b.images.filter(x => typeof x === 'string') : [],
     notes: Array.isArray(b.notes) ? b.notes.map(normalizeNoteForImport) : [],
     ...(b.completedAt ? { completedAt: b.completedAt } : {}),
+    // assignee（0.3 负责人）：导入归一化保留 { clientId, name|null }，防止备份-恢复丢负责人
+    ...(b.assignee && typeof b.assignee === 'object' && typeof b.assignee.clientId === 'string' && b.assignee.clientId
+      ? { assignee: { clientId: b.assignee.clientId, name: typeof b.assignee.name === 'string' ? b.assignee.name : null } }
+      : {}),
+    // deadline（0.3 体验小点）：导入归一化保留合法时间戳 number，防止备份-恢复丢失
+    ...(typeof b.deadline === 'number' && Number.isFinite(b.deadline) ? { deadline: b.deadline } : {}),
   };
 }
 
