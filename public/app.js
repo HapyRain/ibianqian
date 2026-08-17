@@ -27,6 +27,29 @@
       console.log('[Init] writeBackup 可用:', typeof window.electronAPI?.writeBackup);
       console.log('[Init] getLocalIp 可用:', typeof window.electronAPI?.getLocalIp);
 
+      // ==================== Electron 自绘标题栏（窗口控制） ====================
+      /** 是否 Electron 桌面版（浏览器版不渲染标题栏） */
+      const isElectron = !!window.electronAPI?.windowControls;
+      /** 窗口是否置顶（标题栏图钉激活态；与托盘菜单双向同步） */
+      const winAlwaysOnTop = ref(false);
+      /** 窗口是否最大化（标题栏图标切换） */
+      const winMaximized = ref(false);
+
+      if (isElectron) {
+        const wc = window.electronAPI.windowControls;
+        wc.onAlwaysOnTopChange((v) => { winAlwaysOnTop.value = v; });
+        wc.onMaximizedChange((v) => { winMaximized.value = v; });
+        wc.getAlwaysOnTop().then((v) => { winAlwaysOnTop.value = !!v; });
+      }
+      function winMinimize() { window.electronAPI?.windowControls?.minimize(); }
+      function winMaximizeToggle() { window.electronAPI?.windowControls?.maximizeToggle(); }
+      function winClose() { window.electronAPI?.windowControls?.close(); }
+      function toggleAlwaysOnTop() {
+        const wc = window.electronAPI?.windowControls;
+        if (!wc) return;
+        wc.setAlwaysOnTop(!winAlwaysOnTop.value).then((v) => { winAlwaysOnTop.value = !!v; });
+      }
+
       // ==================== 主题（10 套成品，仅本机生效，localStorage 持久化） ====================
       const themes = window.BUGLIST_THEMES || [];
       const THEME_KEY = 'buglist_theme';
@@ -68,13 +91,128 @@
         }, 200); // 与 .theme-popover.leaving 退场动画时长一致
       }
 
-      // ==================== 更多菜单（导出 / 导入） ====================
+      // ==================== 更多菜单（设置 / 导出 / 导入） ====================
       const moreMenuVisible = ref(false);
       const moreMenuLeaving = ref(false);
       const moreMenuX = ref(0);
       const moreMenuY = ref(0);
       /** 隐藏的导入文件选择器 */
       const importFileInput = ref(null);
+
+      // ==================== 设置面板 + 快捷键（存本机 localStorage，不进服务器） ====================
+      const SETTINGS_KEY = 'buglist_settings';
+      /** 默认快捷键：Alt + 3 */
+      const DEFAULT_SHORTCUT = { ctrl: false, alt: true, key: '3' };
+
+      /** 读取本机快捷键设置 */
+      function loadShortcut() {
+        try {
+          const raw = localStorage.getItem(SETTINGS_KEY);
+          if (raw) {
+            const s = JSON.parse(raw).shortcut;
+            if (s && typeof s.key === 'string') {
+              return { ctrl: !!s.ctrl, alt: !!s.alt, key: s.key };
+            }
+          }
+        } catch (e) { /* 忽略脏数据 */ }
+        return { ...DEFAULT_SHORTCUT };
+      }
+
+      /** 当前生效快捷键 */
+      const shortcut = ref(loadShortcut());
+      /** 设置面板可见 / 退场动画中 */
+      const settingsVisible = ref(false);
+      const settingsClosing = ref(false);
+      /** 面板中的快捷键草稿（确认才生效） */
+      const shortcutDraft = ref(null);
+      /** 录制新快捷键中 */
+      const shortcutRecording = ref(false);
+
+      /** 快捷键显示文本：Ctrl + Alt + 3 */
+      function shortcutLabel(s) {
+        if (!s || !s.key) return '';
+        const mods = [];
+        if (s.ctrl) mods.push('Ctrl');
+        if (s.alt) mods.push('Alt');
+        return [...mods, s.key.toUpperCase()].join(' + ');
+      }
+
+      /** 打开设置面板 */
+      function openSettings() {
+        closeMoreMenu();
+        shortcutDraft.value = { ...shortcut.value };
+        settingsVisible.value = true;
+      }
+
+      /** 关闭设置面板（先播出场动画，animationend 后清状态） */
+      function closeSettings() {
+        if (!settingsVisible.value) return;
+        settingsClosing.value = true;
+      }
+
+      function onSettingsAnimEnd() {
+        if (settingsClosing.value) {
+          settingsVisible.value = false;
+          settingsClosing.value = false;
+        }
+      }
+
+      /** 开关设置面板（快捷键触发） */
+      function toggleSettings() {
+        if (settingsVisible.value) closeSettings();
+        else openSettings();
+      }
+
+      /** 开始录制新快捷键 */
+      function startRecordShortcut() {
+        shortcutRecording.value = true;
+      }
+
+      /**
+       * 录制按键捕获：仅允许 Ctrl / Alt（可组合 Ctrl+Alt）+ 一个字母或数字，最多 3 键；Esc 取消
+       */
+      function onRecordKeydown(e) {
+        if (!shortcutRecording.value) return; // 非录制态不拦截任何按键
+        e.preventDefault();
+        e.stopPropagation();
+        const k = e.key;
+        if (k === 'Escape') { shortcutRecording.value = false; return; }
+        if (!/^[a-z0-9]$/i.test(k)) return; // 只认字母/数字
+        const ctrl = e.ctrlKey, alt = e.altKey;
+        if (!ctrl && !alt) return; // 必须搭配 Ctrl 或 Alt
+        if (e.shiftKey || e.metaKey) return; // 仅 Ctrl/Alt 修饰
+        shortcutDraft.value = { ctrl, alt, key: k.toLowerCase() };
+        shortcutRecording.value = false;
+      }
+
+      /** 确认：写入生效快捷键 + 本机缓存 */
+      function confirmSettings() {
+        if (shortcutDraft.value) shortcut.value = { ...shortcutDraft.value };
+        try { localStorage.setItem(SETTINGS_KEY, JSON.stringify({ shortcut: shortcut.value })); } catch (e) { /* 忽略 */ }
+        closeSettings();
+      }
+
+      /**
+       * 全局快捷键监听：匹配当前设置（Ctrl/Alt 精确 + 主键字母/数字，无 Shift/Meta）→ 开关设置面板
+       */
+      function onGlobalKeydown(e) {
+        if (shortcutRecording.value) return; // 录制中由 onRecordKeydown 处理
+        const s = shortcut.value;
+        if (!s) return;
+        if (!!e.ctrlKey !== !!s.ctrl) return;
+        if (!!e.altKey !== !!s.alt) return;
+        if (e.shiftKey || e.metaKey) return;
+        if (e.key.toLowerCase() !== s.key.toLowerCase()) return;
+        e.preventDefault();
+        toggleSettings();
+      }
+
+      window.addEventListener('keydown', onGlobalKeydown);
+      window.addEventListener('keydown', onRecordKeydown); // 录制时 onGlobalKeydown 被短路，此处统一捕获
+      onUnmounted(() => {
+        window.removeEventListener('keydown', onGlobalKeydown);
+        window.removeEventListener('keydown', onRecordKeydown);
+      });
 
       function toggleMoreMenu(e) {
         if (moreMenuLeaving.value) return; // 退场动画期间忽略连点
@@ -1466,6 +1604,7 @@
           message: Vue.h('div', { class: 'late-night-msg' }, quote),
           duration: 4500,
           showClose: false,
+          offset: 50, // 距顶部 50px（75 上移 25）
           customClass: 'late-night-toast',
         });
       }
@@ -3367,7 +3506,16 @@
 
       return {
         // 启动模式对话框
+        // 启动模式选择
         showStartupDialog,
+        // Electron 自绘标题栏（窗口控制）
+        isElectron,
+        winAlwaysOnTop,
+        winMaximized,
+        winMinimize,
+        winMaximizeToggle,
+        winClose,
+        toggleAlwaysOnTop,
         startupMode,
         startupAddressInput,
         displayName,
@@ -3407,6 +3555,19 @@
         exportData,
         onImportFileSelect,
         launchRocket,
+
+        // 设置面板 + 快捷键
+        settingsVisible,
+        settingsClosing,
+        shortcutRecording,
+        shortcutDraft,
+        shortcut,
+        openSettings,
+        closeSettings,
+        onSettingsAnimEnd,
+        startRecordShortcut,
+        confirmSettings,
+        shortcutLabel,
 
         // 搜索
         searchText,

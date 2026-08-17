@@ -23,4 +23,19 @@ contextBridge.exposeInMainWorld('electronAPI', {
    * 获取稳定的设备 id（MAC 哈希，前 16 位）
    */
   getMacId: () => ipcRenderer.invoke('get-mac-id'),
+
+  /**
+   * 窗口控制（自绘标题栏：置顶 / 最小化 / 最大化还原 / 关闭）
+   */
+  windowControls: {
+    minimize: () => ipcRenderer.invoke('win-minimize'),
+    maximizeToggle: () => ipcRenderer.invoke('win-maximize-toggle'),
+    close: () => ipcRenderer.invoke('win-close'),
+    setAlwaysOnTop: (v) => ipcRenderer.invoke('win-always-on-top', !!v),
+    getAlwaysOnTop: () => ipcRenderer.invoke('win-always-on-top-get'),
+    /** 置顶状态变化（托盘菜单 / 标题栏按钮双向同步） */
+    onAlwaysOnTopChange: (cb) => ipcRenderer.on('win-always-on-top-changed', (_e, v) => cb(v)),
+    /** 最大化/还原状态变化（标题栏图标切换） */
+    onMaximizedChange: (cb) => ipcRenderer.on('win-maximized-changed', (_e, v) => cb(v)),
+  },
 });

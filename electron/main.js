@@ -172,6 +172,26 @@ ipcMain.handle('get-mac-id', () => {
 });
 
 // ================================================================
+// IPC：窗口控制（自绘标题栏：置顶 / 最小化 / 最大化还原 / 关闭）
+// ================================================================
+ipcMain.handle('win-minimize', () => { if (mainWindow) mainWindow.minimize(); });
+
+ipcMain.handle('win-maximize-toggle', () => {
+  if (!mainWindow) return;
+  if (mainWindow.isMaximized()) mainWindow.unmaximize();
+  else mainWindow.maximize();
+});
+
+ipcMain.handle('win-close', () => { if (mainWindow) mainWindow.close(); }); // close 事件 → 隐藏到托盘
+
+ipcMain.handle('win-always-on-top', (_e, v) => {
+  if (mainWindow) mainWindow.setAlwaysOnTop(!!v);
+  return mainWindow ? mainWindow.isAlwaysOnTop() : false;
+});
+
+ipcMain.handle('win-always-on-top-get', () => (mainWindow ? mainWindow.isAlwaysOnTop() : false));
+
+// ================================================================
 // 创建主窗口
 // ================================================================
 function createWindow(port) {
@@ -182,6 +202,7 @@ function createWindow(port) {
     minHeight: 400,
     title: '任务清单 - 多人协同',
     icon: APP_ICON_PATH, // 窗口/任务栏图标（Windows 上显式指定，避免默认 Electron 图标）
+    frame: false, // 自绘标题栏（HTML 承载拖拽与窗口控制按钮，含"置顶"）
     show: true,
     autoHideMenuBar: true,
     webPreferences: {
@@ -221,9 +242,20 @@ function createWindow(port) {
     mainWindow = null;
   });
 
-  // 窗口置顶状态变化时更新托盘菜单
+  // 窗口置顶状态变化时更新托盘菜单 + 推送渲染进程（标题栏置顶按钮激活态同步）
   mainWindow.on('always-on-top-changed', () => {
     updateTrayMenu();
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('win-always-on-top-changed', mainWindow.isAlwaysOnTop());
+    }
+  });
+
+  // 最大化/还原状态变化 → 推送渲染进程（标题栏图标切换）
+  mainWindow.on('maximize', () => {
+    if (!mainWindow.isDestroyed()) mainWindow.webContents.send('win-maximized-changed', true);
+  });
+  mainWindow.on('unmaximize', () => {
+    if (!mainWindow.isDestroyed()) mainWindow.webContents.send('win-maximized-changed', false);
   });
 }
 
