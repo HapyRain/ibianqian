@@ -16,6 +16,28 @@
 </head>
 <body>
   <div id="app">
+    <!-- Electron 自绘标题栏（frame:false 后承载拖拽与窗口控制：置顶 / 最小化 / 最大化还原 / 关闭；浏览器版不显示） -->
+    <div v-if="isElectron" class="win-titlebar">
+      <div class="win-titlebar-drag">
+        <img src="/favicon.ico" class="win-titlebar-ico" alt="" />
+        <span class="win-titlebar-app">任务清单</span>
+      </div>
+      <div class="win-titlebar-btns">
+        <button class="win-btn" :class="{ on: winAlwaysOnTop }" @click="toggleAlwaysOnTop" title="窗口置顶" aria-label="窗口置顶">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7 6-2 8h-3.2v4h-3.6v-4H7l-2-8z"/><path d="M9.5 9l2.5 3 2.5-3"/></svg>
+        </button>
+        <button class="win-btn" @click="winMinimize" title="最小化" aria-label="最小化">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M5 12h14"/></svg>
+        </button>
+        <button class="win-btn" @click="winMaximizeToggle" :title="winMaximized ? '还原' : '最大化'" :aria-label="winMaximized ? '还原' : '最大化'">
+          <svg v-if="!winMaximized" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="5" width="14" height="14" rx="1.5"/></svg>
+          <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="7" y="7" width="10" height="10" rx="1.5"/><path d="M9.5 7V5.5h9v9H16"/></svg>
+        </button>
+        <button class="win-btn win-btn-close" @click="winClose" title="关闭（最小化到托盘）" aria-label="关闭">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+        </button>
+      </div>
+    </div>
     <!-- 启动模式选择对话框 -->
     <div class="startup-overlay" v-if="showStartupDialog">
       <div class="startup-dialog">
@@ -109,7 +131,7 @@
             </button>
           </span>
           <span class="theme-box">
-            <button class="theme-btn" @click="toggleMoreMenu($event)" title="更多操作（导出/导入数据）" aria-label="更多操作">
+            <button class="theme-btn" @click="toggleMoreMenu($event)" title="更多设置（导出/导入/设置）" aria-label="更多设置">
               <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="5.5" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="12" cy="18.5" r="1.6"/></svg>
             </button>
           </span>
@@ -167,6 +189,8 @@
 
       <!-- 任务列表卡片：搜索条 + 筛选/新增 + 任务列表（主体） -->
       <div class="bug-panel">
+      <!-- 吸顶区（搜索 + 筛选/新增）：页面滚动时固定在视口顶部；项目栏/顶栏随页面滚走 -->
+      <div class="panel-sticky">
       <!-- 搜索条：单独一行 -->
       <div class="search-bar">
         <el-input v-model="searchText" size="large" clearable placeholder="搜索任务名称…" class="search-input-big">
@@ -199,6 +223,7 @@
           <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.5"/><path d="M12 8.5v7M8.5 12h7"/></svg><span class="btn-label">新增任务</span>
         </el-button>
       </div>
+      </div><!-- /panel-sticky（搜索 + 筛选吸顶区） -->
 
       <!-- 列表区：任务行（主体） -->
       <div class="bug-list" :class="{ 'bug-list-wide': isWideWindow }">
@@ -502,20 +527,24 @@
         :style="{ left: imageMenuX + 'px', top: imageMenuY + 'px' }"
         @click.stop
       >
-        <div class="image-menu-item btn-upload" @click="onChooseUpload">
+        <div class="image-menu-item" @click="onChooseUpload">
           <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15V3"/><path d="M7 8l5-5 5 5"/><path d="M4 17v3h16v-3"/></svg> 选择文件上传
         </div>
         <div class="image-menu-item" @click="onChoosePaste">
           <svg class="icon icon-clipboard-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="3" width="14" height="18" rx="2"/><path d="M9 3v2h6V3"/></svg> 粘贴截图
         </div>
       </div>
-      <!-- 更多菜单（导出 / 导入） -->
+      <!-- 更多菜单（设置 / 导出 / 导入） -->
       <div
         v-show="moreMenuVisible"
         class="theme-popover"
         :style="{ left: moreMenuX + 'px', top: moreMenuY + 'px' }"
         @click.stop
       >
+        <div class="theme-item" @click="openSettings()">
+          <span class="more-icon"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 00.3 1.9l.1.1a2 2 0 11-2.9 2.9l-.1-.1a1.7 1.7 0 00-1.9-.3 1.7 1.7 0 00-1 1.5V21a2 2 0 11-4 0v-.1a1.7 1.7 0 00-1-1.6 1.7 1.7 0 00-1.9.3l-.1.1a2 2 0 11-2.9-2.9l.1-.1a1.7 1.7 0 00.3-1.9 1.7 1.7 0 00-1.5-1H3a2 2 0 110-4h.1a1.7 1.7 0 001.6-1 1.7 1.7 0 00-.3-1.9l-.1-.1a2 2 0 112.9-2.9l.1.1a1.7 1.7 0 001.9.3h.1a1.7 1.7 0 001-1.5V3a2 2 0 114 0v.1a1.7 1.7 0 001 1.5 1.7 1.7 0 001.9-.3l.1-.1a2 2 0 112.9 2.9l-.1.1a1.7 1.7 0 00-.3 1.9v.1a1.7 1.7 0 001.5 1H21a2 2 0 110 4h-.1a1.7 1.7 0 00-1.5 1z"/></svg></span>
+          <span class="theme-name">设置</span>
+        </div>
         <div class="theme-item" @click="exportData">
           <span class="more-icon"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12M7 10l5 5 5-5"/><path d="M4 19h16"/></svg></span>
           <span class="theme-name">导出数据（JSON）</span>
@@ -526,6 +555,33 @@
         </div>
       </div>
       <div v-if="moreMenuVisible" class="theme-menu-backdrop" @click="closeMoreMenu"></div>
+
+      <!-- 设置面板（正中间，渐隐出入；快捷键可自定义，存本机 localStorage 不进服务器） -->
+      <div
+        v-if="settingsVisible"
+        class="settings-overlay"
+        :class="{ 'settings-closing': settingsClosing }"
+        @animationend="onSettingsAnimEnd"
+        @click.self="closeSettings()"
+      >
+        <div class="settings-dialog">
+          <div class="settings-title">设置</div>
+          <div class="settings-row">
+            <span class="settings-label">打开设置的快捷键</span>
+            <button class="settings-shortcut" :class="{ recording: shortcutRecording }" @click="startRecordShortcut()" title="点击后按下新的快捷键">
+              <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="18" height="12" rx="2"/><path d="M7 12h.01M11 12h.01M15 12h.01"/></svg>
+              <span class="settings-shortcut-label">{{ shortcutRecording ? '请按下新快捷键…' : shortcutLabel(shortcutDraft || shortcut) }}</span>
+            </button>
+          </div>
+          <div v-if="shortcutRecording" class="settings-hint">
+            最多 3 键：Ctrl / Alt（可组合 Ctrl+Alt）+ 字母或数字；按 Esc 取消
+          </div>
+          <div class="settings-actions">
+            <button class="ns-skip" @click="closeSettings()">取消</button>
+            <button class="ns-ok" @click="confirmSettings()">确认</button>
+          </div>
+        </div>
+      </div>
       <!-- 主题选择面板（fixed 定位，移出头部避免 overflow:hidden 裁剪与毛玻璃层叠上下文） -->
       <div
         v-show="themeMenuVisible"

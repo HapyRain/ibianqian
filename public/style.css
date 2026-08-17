@@ -845,7 +845,8 @@ body {
 .el-select-dropdown {
   border-radius: var(--radius) !important;
   box-shadow: var(--shadow-dialog) !important;
-  border: 1px solid rgba(0, 0, 0, 0.06) !important;
+  /* 边框只保留最外层（.el-popper.is-light），避免内外双层边、四角多余 */
+  border: none !important;
   backdrop-filter: blur(20px);
   -webkit-backdrop-filter: blur(20px);
 }
@@ -866,6 +867,7 @@ body {
 
 .el-popper.is-light {
   border: 1px solid rgba(0, 0, 0, 0.06) !important;
+  border-radius: var(--radius) !important;
 }
 
 /* ============================================================
@@ -1161,10 +1163,11 @@ body {
   padding: 44px 48px;
   max-width: 520px;
   width: 90%;
+  max-height: calc(100vh - 32px); /* 小窗体自适应：超高时对话框内部滚动，不再溢出看不见 */
+  overflow-y: auto;
   box-shadow: var(--shadow-dialog);
   text-align: center;
   position: relative;
-  overflow: hidden;
 }
 
 .startup-dialog::before {
@@ -1642,11 +1645,11 @@ body {
    ============================================================ */
 
 /* ============================================================
-   滚动条（浅色）
+   滚动条（隐藏：界面整洁；滚动功能不受影响，滚轮/触控板可用）
    ============================================================ */
 ::-webkit-scrollbar {
-  width: 5px;
-  height: 5px;
+  width: 0;
+  height: 0;
 }
 
 ::-webkit-scrollbar-track {
@@ -1654,18 +1657,12 @@ body {
 }
 
 ::-webkit-scrollbar-thumb {
-  background-color: rgba(0, 0, 0, 0.12);
-  border-radius: 3px;
-  transition: background-color var(--transition-fast);
-}
-
-::-webkit-scrollbar-thumb:hover {
-  background-color: rgba(0, 0, 0, 0.2);
+  background-color: transparent;
 }
 
 * {
-  scrollbar-width: thin;
-  scrollbar-color: rgba(0, 0, 0, 0.12) transparent;
+  scrollbar-width: none;
+  scrollbar-color: transparent transparent;
 }
 
 /* ============================================================
@@ -1801,6 +1798,13 @@ body {
    任务列表（自定义行，替代 el-table）
    ============================================================ */
 .bug-list{min-height:0;padding:12px 16px 16px}
+/* 吸顶区（搜索 + 筛选/新增）：页面滚动时固定在视口顶部（顶栏/项目栏随页面滚走）；
+   背景不透明盖住下方列表即可，常态不加阴影 */
+.panel-sticky{
+  position:sticky;top:0;z-index:120;
+  background:var(--surface);
+  border-radius:var(--radius-lg) var(--radius-lg) 0 0;
+}
 /* 行列表（TransitionGroup 渲染容器）：flex 列布局；移动/飞出动画由 JS 手动驱动（内联样式） */
 .bug-rows{display:flex;flex-direction:column;gap:7px;position:relative}
 /* 计数徽标闪烁（状态移动完成后的反馈涟漪） */
@@ -2095,6 +2099,46 @@ body {
 .theme-menu-backdrop{position:fixed;inset:0;z-index:79}
 
 /* ============================================================
+   设置面板（正中间，渐隐出入；快捷键录制）
+   ============================================================ */
+.settings-overlay{
+  position:fixed;inset:0;z-index:2600;
+  background:rgba(28,26,23,.4);
+  backdrop-filter:blur(4px);
+  -webkit-backdrop-filter:blur(4px);
+  display:flex;align-items:center;justify-content:center;
+  animation:settingsIn .25s cubic-bezier(.3,.9,.35,1);
+}
+.settings-closing{animation:settingsOut .25s cubic-bezier(.3,.9,.35,1) forwards;pointer-events:none}
+@keyframes settingsIn{from{opacity:0}to{opacity:1}}
+@keyframes settingsOut{from{opacity:1}to{opacity:0}}
+.settings-dialog{
+  background:var(--surface-hi);
+  border:1px solid var(--line);
+  border-radius:var(--radius-lg);
+  padding:22px 24px 18px;
+  width:340px;max-width:90vw;
+  box-shadow:var(--shadow-dialog);
+  animation:settingsDialogIn .25s cubic-bezier(.3,.9,.35,1);
+}
+@keyframes settingsDialogIn{from{opacity:0;transform:translateY(8px) scale(.97)}to{opacity:1;transform:none}}
+.settings-title{font-size:15px;font-weight:700;color:var(--text);margin-bottom:16px}
+.settings-row{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:8px}
+.settings-label{font-size:12.5px;color:var(--text-2);flex:none}
+.settings-shortcut{
+  display:inline-flex;align-items:center;gap:7px;
+  border:1px solid var(--line);background:var(--surface);color:var(--text);
+  border-radius:9px;padding:6px 12px;font-size:12.5px;font-weight:600;cursor:pointer;
+  transition:border-color .25s cubic-bezier(.3,.9,.35,1), background .25s cubic-bezier(.3,.9,.35,1), color .25s cubic-bezier(.3,.9,.35,1);
+}
+.settings-shortcut .icon{width:14px;height:14px;color:var(--text-2)}
+.settings-shortcut:hover{border-color:var(--primary);background:var(--primary-soft)}
+.settings-shortcut.recording{border-color:var(--primary);background:var(--primary-soft);color:var(--primary);animation:shortcutPulse 1s ease infinite}
+@keyframes shortcutPulse{0%,100%{box-shadow:0 0 0 0 rgba(var(--primary-rgb),.25)}50%{box-shadow:0 0 0 4px rgba(var(--primary-rgb),0)}}
+.settings-hint{font-size:11.5px;color:var(--text-2);margin:4px 0 10px}
+.settings-actions{display:flex;justify-content:flex-end;align-items:center;gap:10px;margin-top:14px}
+
+/* ============================================================
    主题切换过渡（暗色幕布）：点选主题 → 幕布淡入 → 换肤（零跳变）→ 幕布淡出。
    全程 ≈1.05s，有始有终；幕布期间挡点击防半途打断。层级 3000（压过一切）。
    ============================================================ */
@@ -2108,11 +2152,40 @@ body {
 @keyframes themeRebuildIn{from{opacity:0}to{opacity:1}}
 
 /* ============================================================
+   Electron 自绘标题栏（frame:false；拖拽区 + 置顶/最小化/最大化还原/关闭）
+   ============================================================ */
+.win-titlebar{
+  position:sticky;top:0;z-index:3000;
+  display:flex;align-items:center;height:36px;flex:none;
+  background:var(--surface-hi);
+  border-bottom:1px solid var(--line-soft);
+  user-select:none;-webkit-user-select:none;
+}
+.win-titlebar-drag{
+  flex:1;align-self:stretch;
+  -webkit-app-region:drag;
+  display:flex;align-items:center;gap:7px;padding:0 12px;
+  cursor:default;
+}
+.win-titlebar-ico{width:16px;height:16px;border-radius:3px;pointer-events:none}
+.win-titlebar-app{font-size:12px;font-weight:600;color:var(--text-2);letter-spacing:.3px}
+.win-titlebar-btns{display:flex;align-items:center;-webkit-app-region:no-drag;height:100%}
+.win-btn{
+  width:44px;height:100%;border:none;background:transparent;color:var(--text-2);
+  display:inline-flex;align-items:center;justify-content:center;cursor:pointer;
+  transition:background .15s ease,color .15s ease;
+}
+.win-btn:hover{background:rgba(var(--text-rgb),.09);color:var(--text)}
+.win-btn-close:hover{background:var(--danger);color:#fff}
+.win-btn.on{color:var(--primary)}
+.win-btn svg{width:15px;height:15px}
+
+/* ============================================================
    小火箭（右侧常驻）：hover 点火预热，点击发射回顶
    ============================================================ */
 .rocket-btn {
   position: fixed;
-  right: 20px;
+  right: 0; /* 试 0：贴右缘不出屏 */
   bottom: 20px;
   width: 46px;
   height: 46px;
