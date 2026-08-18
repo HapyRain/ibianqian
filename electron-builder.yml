@@ -13,8 +13,15 @@ files:
 win:
   target: portable
   icon: build/icon.ico   # 显式指定（win-unpacked 与 portable 自解压壳共用）
+  # 数字签名（自签名证书 build/ibianqian-sign.pfx，仅本机生成，已加入 .gitignore；
+  # 换正式证书时替换这两行，或用环境变量 CSC_LINK / CSC_KEY_PASSWORD）
+  signtoolOptions:
+    certificateFile: build/ibianqian-sign.pfx
+    certificatePassword: "Ibianqian2026!"
 portable:
   artifactName: 任务清单.exe
+  # 注：portable 目标无法直接配置版本资源语言（electron-builder 限制：
+  # nsis.language 对 portable 不生效、portable.language 会被 schema 拒绝），暂保持默认英文，后续再说
 extraResources: []
 asar:
   smartUnpack: true

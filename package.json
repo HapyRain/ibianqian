@@ -2,6 +2,7 @@
   "name": "ibianqian-buglist",
   "version": "0.2.1",
   "description": "多人协同 Bug 清单工具",
+  "author": "HapyRain",
   "main": "electron/main.js",
   "scripts": {
     "start": "node server.js",
