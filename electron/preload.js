@@ -37,5 +37,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     onAlwaysOnTopChange: (cb) => ipcRenderer.on('win-always-on-top-changed', (_e, v) => cb(v)),
     /** 最大化/还原状态变化（标题栏图标切换） */
     onMaximizedChange: (cb) => ipcRenderer.on('win-maximized-changed', (_e, v) => cb(v)),
+    /** 同步全局快捷键（窗口 最小化↔还原 切换；accel 形如 'Alt+3'；null 表示注销） */
+    setShortcut: (accel) => ipcRenderer.invoke('shortcut-set', accel),
   },
 });

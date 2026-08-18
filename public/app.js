@@ -137,6 +137,24 @@
         return [...mods, s.key.toUpperCase()].join(' + ');
       }
 
+      /** 快捷键 → Electron accelerator 文本（如 'Alt+3' / 'Control+Alt+3'），供 globalShortcut 注册 */
+      function shortcutAccelerator(s) {
+        if (!s || !s.key) return null;
+        const mods = [];
+        if (s.ctrl) mods.push('Control');
+        if (s.alt) mods.push('Alt');
+        return [...mods, s.key.toUpperCase()].join('+');
+      }
+
+      /** 把当前生效快捷键同步给 Electron 主进程（globalShortcut 注册窗口切换热键）；浏览器版为空操作 */
+      async function syncShortcutToMain() {
+        const wc = window.electronAPI?.windowControls;
+        if (!wc?.setShortcut) return true;
+        try {
+          return await wc.setShortcut(shortcutAccelerator(shortcut.value));
+        } catch (e) { return false; }
+      }
+
       /** 打开设置面板 */
       function openSettings() {
         closeMoreMenu();
@@ -163,9 +181,10 @@
         else openSettings();
       }
 
-      /** 开始录制新快捷键 */
+      /** 开始录制新快捷键（桌面版先注销全局热键，避免录制过程中误触发窗口切换） */
       function startRecordShortcut() {
         shortcutRecording.value = true;
+        window.electronAPI?.windowControls?.setShortcut?.(null);
       }
 
       /**
@@ -176,7 +195,11 @@
         e.preventDefault();
         e.stopPropagation();
         const k = e.key;
-        if (k === 'Escape') { shortcutRecording.value = false; return; }
+        if (k === 'Escape') {
+          shortcutRecording.value = false;
+          syncShortcutToMain(); // 取消录制 → 恢复注册当前生效快捷键
+          return;
+        }
         if (!/^[a-z0-9]$/i.test(k)) return; // 只认字母/数字
         const ctrl = e.ctrlKey, alt = e.altKey;
         if (!ctrl && !alt) return; // 必须搭配 Ctrl 或 Alt
@@ -185,17 +208,24 @@
         shortcutRecording.value = false;
       }
 
-      /** 确认：写入生效快捷键 + 本机缓存 */
-      function confirmSettings() {
+      /** 确认：写入生效快捷键 + 本机缓存 + 同步给主进程注册全局热键 */
+      async function confirmSettings() {
         if (shortcutDraft.value) shortcut.value = { ...shortcutDraft.value };
         try { localStorage.setItem(SETTINGS_KEY, JSON.stringify({ shortcut: shortcut.value })); } catch (e) { /* 忽略 */ }
+        const ok = await syncShortcutToMain();
+        if (!ok) {
+          ElementPlus.ElMessage.warning('该快捷键可能已被其他程序占用，注册失败，请换个组合键');
+        }
         closeSettings();
       }
 
       /**
-       * 全局快捷键监听：匹配当前设置（Ctrl/Alt 精确 + 主键字母/数字，无 Shift/Meta）→ 开关设置面板
+       * 快捷键监听（浏览器版）：匹配当前设置（Ctrl/Alt 精确 + 主键字母/数字，无 Shift/Meta）→ 开关设置面板
+       * 桌面版（Electron）此处不做任何事：窗口 最小化↔还原 由主进程 globalShortcut 负责
+       * 注：命名避开查看器 Esc 关闭用的 onGlobalKeydown（同名后定义会覆盖先定义，导致快捷键失效）
        */
-      function onGlobalKeydown(e) {
+      function onShortcutKeydown(e) {
+        if (isElectron) return; // 桌面版窗口控制走主进程全局热键
         if (shortcutRecording.value) return; // 录制中由 onRecordKeydown 处理
         const s = shortcut.value;
         if (!s) return;
@@ -207,10 +237,10 @@
         toggleSettings();
       }
 
-      window.addEventListener('keydown', onGlobalKeydown);
-      window.addEventListener('keydown', onRecordKeydown); // 录制时 onGlobalKeydown 被短路，此处统一捕获
+      window.addEventListener('keydown', onShortcutKeydown);
+      window.addEventListener('keydown', onRecordKeydown); // 录制时 onShortcutKeydown 被短路，此处统一捕获
       onUnmounted(() => {
-        window.removeEventListener('keydown', onGlobalKeydown);
+        window.removeEventListener('keydown', onShortcutKeydown);
         window.removeEventListener('keydown', onRecordKeydown);
       });
 
@@ -3480,8 +3510,10 @@
         initStartup();
         // 注册全局粘贴事件监听（仅粘贴对话框打开时生效）
         document.addEventListener('paste', onGlobalPaste);
-        // 注册全局 Esc 监听（仅查看器打开时生效，用于关闭大图预览）
+        // 注册全局 Esc 监听（仅查看器打开时生效，用于关闭大图预览；onGlobalKeydown 即查看器 Esc 处理器）
         document.addEventListener('keydown', onGlobalKeydown);
+        // 桌面版：把本机保存的快捷键同步给主进程（globalShortcut 注册窗口切换热键）
+        syncShortcutToMain();
         // 宽窗口标记
         updW();
         window.addEventListener('resize', updW);
