@@ -8,7 +8,8 @@ const { WebSocketServer } = require('ws');
 // ================================================================
 // 1. 配置常量
 // ================================================================
-const INITIAL_PORT = 3050;
+// 起始端口（环境变量 BUGLIST_PORT 可覆盖：自动化验证用独立端口，避免与运行中服务冲突；3050 被占时自动 +1 探测到 3070）
+const INITIAL_PORT = Number(process.env.BUGLIST_PORT) || 3050;
 const MAX_PORT = 3070;
 const BIND_ADDR = '0.0.0.0';
 
@@ -357,13 +358,24 @@ async function handleUpdate(ws, msg, _wss) {
 
   // 字段白名单 + 值校验（放在 updateData 之前，尽早 return，避免无谓进锁）
   // 'name' 允许空字符串（清空名称）；图片生命周期改由 upload/removeImage/DELETE 端点管理，'image' 不再走 update
-  if (!['name', 'status'].includes(field)) return;
+  if (!['name', 'status', 'deadline', 'archived'].includes(field)) return;
   if (field === 'name' && typeof value !== 'string') return;
   if (field === 'status' && !ALLOWED_STATUSES.includes(value)) return;
+  // deadline（0.3 体验小点）：仅接受时间戳 number（毫秒）或 null（清除）；非法值一律拒绝
+  if (field === 'deadline' && !(typeof value === 'number' && Number.isFinite(value)) && value !== null) return;
+  // archived（归档体系）：仅接受布尔；状态机细则在锁内校验（依赖 bug 当前状态）
+  if (field === 'archived' && typeof value !== 'boolean') return;
 
   const result = await updateData((data) => {
     const { bug } = findBugInTasks(data.tasks, taskId, bugId);
     if (!bug) return null;
+    // 归档行锁死：archived 行拒绝一切其它字段修改（spec 第 7 节防线）
+    if (bug.archived === true && field !== 'archived') return null;
+    // 归档状态机：true 仅当已完成且未归档；false 仅当已归档（spec 第 10 节矩阵）
+    if (field === 'archived') {
+      if (value === true && (bug.status !== '已完成' || bug.archived === true)) return null;
+      if (value === false && bug.archived !== true) return null;
+    }
     bug[field] = value;
 
     // 状态变更时自动管理 completedAt 时间锚点 + statusChangedAt（组内排序依据：新来的往组末尾）
@@ -379,7 +391,21 @@ async function handleUpdate(ws, msg, _wss) {
       }
     }
 
-    return { type: 'update', taskId, bugId, field, value, completedAt, statusChangedAt: bug.statusChangedAt };
+    // archivedAt 伴生字段（同 completedAt 范式）：归档写入 / 恢复删除
+    let archivedAt = undefined;
+    if (field === 'archived') {
+      if (value === true) {
+        bug.archivedAt = Date.now();
+        archivedAt = bug.archivedAt;
+      } else {
+        // 恢复归档：彻底清除标记（不留 archived:false，保持与导入归一化一致的干净形态）
+        delete bug.archived;
+        delete bug.archivedAt;
+        archivedAt = null; // 通知客户端删除
+      }
+    }
+
+    return { type: 'update', taskId, bugId, field, value, completedAt, archivedAt, statusChangedAt: bug.statusChangedAt };
   });
 
   if (result.change) {
@@ -424,6 +450,29 @@ async function handleAdd(ws, msg, _wss) {
     // 归一化：确保 images 字段为数组（旧客户端 add 不带 images）；statusChangedAt 缺省为当前时间
     const normalizedBug = { ...bug, images: Array.isArray(bug.images) ? bug.images : [] };
     if (typeof normalizedBug.statusChangedAt !== 'number') normalizedBug.statusChangedAt = Date.now();
+    // assignee 归一化（0.3 负责人）：只接受 { clientId: string, name: string|null }，非法值（含非对象）显式删除，杜绝脏数据入库
+    if (bug.assignee && typeof bug.assignee === 'object' && typeof bug.assignee.clientId === 'string' && bug.assignee.clientId) {
+      normalizedBug.assignee = { clientId: bug.assignee.clientId, name: typeof bug.assignee.name === 'string' ? bug.assignee.name : null };
+    } else {
+      delete normalizedBug.assignee;
+    }
+    // deadline 归一化（0.3 体验小点）：仅保留合法时间戳 number（毫秒），其余（含 null/字符串）显式删除
+    if (!(typeof bug.deadline === 'number' && Number.isFinite(bug.deadline))) {
+      delete normalizedBug.deadline;
+    }
+    // archived（归档体系，0903）：仅当 status 已完成时保留布尔标记与数字时间，非法一律 delete（与 normalizeBugForImport 同规则）
+    // 注：{ ...bug } 展开会原样带进 archived:1 / 待修复却 archived:true 等脏值，必须在此显式覆盖或删除
+    if (bug.archived === true && bug.status === '已完成') {
+      normalizedBug.archived = true;
+      if (typeof bug.archivedAt === 'number' && Number.isFinite(bug.archivedAt)) {
+        normalizedBug.archivedAt = bug.archivedAt;
+      } else {
+        delete normalizedBug.archivedAt;
+      }
+    } else {
+      delete normalizedBug.archived;
+      delete normalizedBug.archivedAt;
+    }
     task.bugs.push(normalizedBug);
     return { type: 'add', taskId, bug: { ...normalizedBug } };
   });
@@ -442,6 +491,13 @@ async function handleDelete(ws, msg, _wss) {
   const { taskId, bugId } = msg.data || {};
   if (!taskId || !bugId) return;
 
+  // 防线预检（spec 第 7 节）：已完成/已归档任务不可删除——仅避免无谓快照；
+  // 权威防线在下方锁内 transform（返回 null 即拒绝），此处提前 return 同样不写盘不广播
+  const pre = readData();
+  const preTask = pre.tasks.find(t => t.id === taskId);
+  const preBug = preTask && preTask.bugs.find(b => b.id === bugId);
+  if (preBug && (preBug.status === '已完成' || preBug.archived === true)) return;
+
   snapshotBeforeDelete(); // 删除前快照：可回滚
   // 闭包收集被删 bug 的全部图片文件名（不放进 change，避免污染广播协议）
   const deletedImages = [];
@@ -450,6 +506,8 @@ async function handleDelete(ws, msg, _wss) {
     if (!task) return null;
     const index = task.bugs.findIndex(b => b.id === bugId);
     if (index === -1) return null;
+    // 权威防线：已完成/已归档任务不可删除（竞态兜底，与预检同规则）
+    if (task.bugs[index].status === '已完成' || task.bugs[index].archived === true) return null;
     if (Array.isArray(task.bugs[index].images)) {
       deletedImages.push(...task.bugs[index].images);
     }
@@ -488,8 +546,8 @@ async function handleCreateTask(ws, msg, _wss) {
 
   const result = await updateData((data) => {
     if (data.tasks.some(t => t.id === task.id)) return null;
-    data.tasks.push({ id: task.id, name: task.name || '新任务', bugs: [] });
-    return { type: 'createTask', task: { id: task.id, name: task.name || '新任务' } };
+    data.tasks.push({ id: task.id, name: task.name || '新项目', bugs: [] });
+    return { type: 'createTask', task: { id: task.id, name: task.name || '新项目' } };
   });
 
   if (result.change) {
@@ -1497,6 +1555,16 @@ function normalizeBugForImport(b) {
     images: Array.isArray(b.images) ? b.images.filter(x => typeof x === 'string') : [],
     notes: Array.isArray(b.notes) ? b.notes.map(normalizeNoteForImport) : [],
     ...(b.completedAt ? { completedAt: b.completedAt } : {}),
+    // assignee（0.3 负责人）：导入归一化保留 { clientId, name|null }，防止备份-恢复丢负责人
+    ...(b.assignee && typeof b.assignee === 'object' && typeof b.assignee.clientId === 'string' && b.assignee.clientId
+      ? { assignee: { clientId: b.assignee.clientId, name: typeof b.assignee.name === 'string' ? b.assignee.name : null } }
+      : {}),
+    // deadline（0.3 体验小点）：导入归一化保留合法时间戳 number，防止备份-恢复丢失
+    ...(typeof b.deadline === 'number' && Number.isFinite(b.deadline) ? { deadline: b.deadline } : {}),
+    // archived（归档体系）：仅当 status 为已完成时保留标记与时间（防脏数据，spec 第 7 节）
+    ...(b.archived === true && b.status === '已完成'
+      ? { archived: true, ...(typeof b.archivedAt === 'number' && Number.isFinite(b.archivedAt) ? { archivedAt: b.archivedAt } : {}) }
+      : {}),
   };
 }
 

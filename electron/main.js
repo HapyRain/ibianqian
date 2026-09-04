@@ -4,7 +4,7 @@
  * - 系统托盘（关闭隐藏、双击显示、置顶开关、退出）
  * - BrowserWindow 加载本地服务
  */
-const { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain } = require('electron');
+const { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain, globalShortcut } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -172,6 +172,69 @@ ipcMain.handle('get-mac-id', () => {
 });
 
 // ================================================================
+// IPC：窗口控制（自绘标题栏：置顶 / 最小化 / 最大化还原 / 关闭）
+// ================================================================
+ipcMain.handle('win-minimize', () => { if (mainWindow) mainWindow.minimize(); });
+
+ipcMain.handle('win-maximize-toggle', () => {
+  if (!mainWindow) return;
+  if (mainWindow.isMaximized()) mainWindow.unmaximize();
+  else mainWindow.maximize();
+});
+
+ipcMain.handle('win-close', () => { if (mainWindow) mainWindow.close(); }); // close 事件 → 隐藏到托盘
+
+ipcMain.handle('win-always-on-top', (_e, v) => {
+  if (mainWindow) mainWindow.setAlwaysOnTop(!!v);
+  return mainWindow ? mainWindow.isAlwaysOnTop() : false;
+});
+
+ipcMain.handle('win-always-on-top-get', () => (mainWindow ? mainWindow.isAlwaysOnTop() : false));
+
+// ================================================================
+// 全局快捷键：窗口 最小化 ↔ 还原（窗口化）切换
+// - 快捷键在渲染进程设置面板里配置（存本机 localStorage），启动/确认时经 IPC 同步到主进程
+// - 用 Electron globalShortcut 注册为系统级热键：窗口最小化/隐藏时按键仍能触发还原
+// ================================================================
+let windowShortcut = null;
+
+/** 窗口 最小化 ↔ 还原 切换（隐藏(托盘)→显示；最小化→还原；正常→最小化） */
+function toggleWindowState() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  if (!mainWindow.isVisible()) {
+    mainWindow.show();
+    mainWindow.focus();
+    return;
+  }
+  if (mainWindow.isMinimized()) {
+    mainWindow.restore();
+    mainWindow.focus();
+    return;
+  }
+  mainWindow.minimize();
+}
+
+/**
+ * 注册/更新全局快捷键（accel 形如 'Alt+3' / 'Control+Alt+3'）
+ * @param {string|null} accel - null 表示注销当前快捷键（录制新键期间调用）
+ * @returns {boolean} 注册是否成功（false = 组合键被其他程序占用等）
+ */
+function registerWindowShortcut(accel) {
+  if (windowShortcut === accel && accel && globalShortcut.isRegistered(accel)) return true;
+  if (windowShortcut) {
+    globalShortcut.unregister(windowShortcut);
+    windowShortcut = null;
+  }
+  if (!accel) return true;
+  const ok = globalShortcut.register(accel, toggleWindowState);
+  if (ok) windowShortcut = accel;
+  return ok;
+}
+
+// 渲染进程同步快捷键（启动时 / 设置面板确认后 / 录制期间注销）
+ipcMain.handle('shortcut-set', (_e, accel) => registerWindowShortcut(accel));
+
+// ================================================================
 // 创建主窗口
 // ================================================================
 function createWindow(port) {
@@ -179,9 +242,10 @@ function createWindow(port) {
     width: 900,
     height: 600,
     minWidth: 600,
-    minHeight: 400,
+    minHeight: 530, /* 最小窗 600×530（spec 第 9 节）：保证启动弹窗与贴底面板在极限小窗下仍完整可用 */
     title: '任务清单 - 多人协同',
     icon: APP_ICON_PATH, // 窗口/任务栏图标（Windows 上显式指定，避免默认 Electron 图标）
+    frame: false, // 自绘标题栏（HTML 承载拖拽与窗口控制按钮，含"置顶"）
     show: true,
     autoHideMenuBar: true,
     webPreferences: {
@@ -221,9 +285,20 @@ function createWindow(port) {
     mainWindow = null;
   });
 
-  // 窗口置顶状态变化时更新托盘菜单
+  // 窗口置顶状态变化时更新托盘菜单 + 推送渲染进程（标题栏置顶按钮激活态同步）
   mainWindow.on('always-on-top-changed', () => {
     updateTrayMenu();
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('win-always-on-top-changed', mainWindow.isAlwaysOnTop());
+    }
+  });
+
+  // 最大化/还原状态变化 → 推送渲染进程（标题栏图标切换）
+  mainWindow.on('maximize', () => {
+    if (!mainWindow.isDestroyed()) mainWindow.webContents.send('win-maximized-changed', true);
+  });
+  mainWindow.on('unmaximize', () => {
+    if (!mainWindow.isDestroyed()) mainWindow.webContents.send('win-maximized-changed', false);
   });
 }
 
@@ -272,6 +347,7 @@ app.whenReady().then(async () => {
 // ================================================================
 app.on('before-quit', () => {
   app.isQuitting = true;
+  globalShortcut.unregisterAll();
 });
 
 app.on('window-all-closed', () => {

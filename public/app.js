@@ -27,6 +27,29 @@
       console.log('[Init] writeBackup 可用:', typeof window.electronAPI?.writeBackup);
       console.log('[Init] getLocalIp 可用:', typeof window.electronAPI?.getLocalIp);
 
+      // ==================== Electron 自绘标题栏（窗口控制） ====================
+      /** 是否 Electron 桌面版（浏览器版不渲染标题栏） */
+      const isElectron = !!window.electronAPI?.windowControls;
+      /** 窗口是否置顶（标题栏图钉激活态；与托盘菜单双向同步） */
+      const winAlwaysOnTop = ref(false);
+      /** 窗口是否最大化（标题栏图标切换） */
+      const winMaximized = ref(false);
+
+      if (isElectron) {
+        const wc = window.electronAPI.windowControls;
+        wc.onAlwaysOnTopChange((v) => { winAlwaysOnTop.value = v; });
+        wc.onMaximizedChange((v) => { winMaximized.value = v; });
+        wc.getAlwaysOnTop().then((v) => { winAlwaysOnTop.value = !!v; });
+      }
+      function winMinimize() { window.electronAPI?.windowControls?.minimize(); }
+      function winMaximizeToggle() { window.electronAPI?.windowControls?.maximizeToggle(); }
+      function winClose() { window.electronAPI?.windowControls?.close(); }
+      function toggleAlwaysOnTop() {
+        const wc = window.electronAPI?.windowControls;
+        if (!wc) return;
+        wc.setAlwaysOnTop(!winAlwaysOnTop.value).then((v) => { winAlwaysOnTop.value = !!v; });
+      }
+
       // ==================== 主题（10 套成品，仅本机生效，localStorage 持久化） ====================
       const themes = window.BUGLIST_THEMES || [];
       const THEME_KEY = 'buglist_theme';
@@ -68,13 +91,158 @@
         }, 200); // 与 .theme-popover.leaving 退场动画时长一致
       }
 
-      // ==================== 更多菜单（导出 / 导入） ====================
+      // ==================== 更多菜单（设置 / 导出 / 导入） ====================
       const moreMenuVisible = ref(false);
       const moreMenuLeaving = ref(false);
       const moreMenuX = ref(0);
       const moreMenuY = ref(0);
       /** 隐藏的导入文件选择器 */
       const importFileInput = ref(null);
+
+      // ==================== 设置面板 + 快捷键（存本机 localStorage，不进服务器） ====================
+      const SETTINGS_KEY = 'buglist_settings';
+      /** 默认快捷键：Alt + 3 */
+      const DEFAULT_SHORTCUT = { ctrl: false, alt: true, key: '3' };
+
+      /** 读取本机快捷键设置 */
+      function loadShortcut() {
+        try {
+          const raw = localStorage.getItem(SETTINGS_KEY);
+          if (raw) {
+            const s = JSON.parse(raw).shortcut;
+            if (s && typeof s.key === 'string') {
+              return { ctrl: !!s.ctrl, alt: !!s.alt, key: s.key };
+            }
+          }
+        } catch (e) { /* 忽略脏数据 */ }
+        return { ...DEFAULT_SHORTCUT };
+      }
+
+      /** 当前生效快捷键 */
+      const shortcut = ref(loadShortcut());
+      /** 设置面板可见 / 退场动画中 */
+      const settingsVisible = ref(false);
+      const settingsClosing = ref(false);
+      /** 面板中的快捷键草稿（确认才生效） */
+      const shortcutDraft = ref(null);
+      /** 录制新快捷键中 */
+      const shortcutRecording = ref(false);
+
+      /** 快捷键显示文本：Ctrl + Alt + 3 */
+      function shortcutLabel(s) {
+        if (!s || !s.key) return '';
+        const mods = [];
+        if (s.ctrl) mods.push('Ctrl');
+        if (s.alt) mods.push('Alt');
+        return [...mods, s.key.toUpperCase()].join(' + ');
+      }
+
+      /** 快捷键 → Electron accelerator 文本（如 'Alt+3' / 'Control+Alt+3'），供 globalShortcut 注册 */
+      function shortcutAccelerator(s) {
+        if (!s || !s.key) return null;
+        const mods = [];
+        if (s.ctrl) mods.push('Control');
+        if (s.alt) mods.push('Alt');
+        return [...mods, s.key.toUpperCase()].join('+');
+      }
+
+      /** 把当前生效快捷键同步给 Electron 主进程（globalShortcut 注册窗口切换热键）；浏览器版为空操作 */
+      async function syncShortcutToMain() {
+        const wc = window.electronAPI?.windowControls;
+        if (!wc?.setShortcut) return true;
+        try {
+          return await wc.setShortcut(shortcutAccelerator(shortcut.value));
+        } catch (e) { return false; }
+      }
+
+      /** 打开设置面板 */
+      function openSettings() {
+        closeMoreMenu();
+        shortcutDraft.value = { ...shortcut.value };
+        settingsVisible.value = true;
+      }
+
+      /** 关闭设置面板（先播出场动画，animationend 后清状态） */
+      function closeSettings() {
+        if (!settingsVisible.value) return;
+        settingsClosing.value = true;
+      }
+
+      function onSettingsAnimEnd() {
+        if (settingsClosing.value) {
+          settingsVisible.value = false;
+          settingsClosing.value = false;
+        }
+      }
+
+      /** 开关设置面板（快捷键触发） */
+      function toggleSettings() {
+        if (settingsVisible.value) closeSettings();
+        else openSettings();
+      }
+
+      /** 开始录制新快捷键（桌面版先注销全局热键，避免录制过程中误触发窗口切换） */
+      function startRecordShortcut() {
+        shortcutRecording.value = true;
+        window.electronAPI?.windowControls?.setShortcut?.(null);
+      }
+
+      /**
+       * 录制按键捕获：仅允许 Ctrl / Alt（可组合 Ctrl+Alt）+ 一个字母或数字，最多 3 键；Esc 取消
+       */
+      function onRecordKeydown(e) {
+        if (!shortcutRecording.value) return; // 非录制态不拦截任何按键
+        e.preventDefault();
+        e.stopPropagation();
+        const k = e.key;
+        if (k === 'Escape') {
+          shortcutRecording.value = false;
+          syncShortcutToMain(); // 取消录制 → 恢复注册当前生效快捷键
+          return;
+        }
+        if (!/^[a-z0-9]$/i.test(k)) return; // 只认字母/数字
+        const ctrl = e.ctrlKey, alt = e.altKey;
+        if (!ctrl && !alt) return; // 必须搭配 Ctrl 或 Alt
+        if (e.shiftKey || e.metaKey) return; // 仅 Ctrl/Alt 修饰
+        shortcutDraft.value = { ctrl, alt, key: k.toLowerCase() };
+        shortcutRecording.value = false;
+      }
+
+      /** 确认：写入生效快捷键 + 本机缓存 + 同步给主进程注册全局热键 */
+      async function confirmSettings() {
+        if (shortcutDraft.value) shortcut.value = { ...shortcutDraft.value };
+        try { localStorage.setItem(SETTINGS_KEY, JSON.stringify({ shortcut: shortcut.value })); } catch (e) { /* 忽略 */ }
+        const ok = await syncShortcutToMain();
+        if (!ok) {
+          ElementPlus.ElMessage.warning('该快捷键可能已被其他程序占用，注册失败，请换个组合键');
+        }
+        closeSettings();
+      }
+
+      /**
+       * 快捷键监听（浏览器版）：匹配当前设置（Ctrl/Alt 精确 + 主键字母/数字，无 Shift/Meta）→ 开关设置面板
+       * 桌面版（Electron）此处不做任何事：窗口 最小化↔还原 由主进程 globalShortcut 负责
+       * 注：命名避开查看器 Esc 关闭用的 onGlobalKeydown（同名后定义会覆盖先定义，导致快捷键失效）
+       */
+      function onShortcutKeydown(e) {
+        if (isElectron) return; // 桌面版窗口控制走主进程全局热键
+        if (shortcutRecording.value) return; // 录制中由 onRecordKeydown 处理
+        const s = shortcut.value;
+        if (!s) return;
+        if (!!e.ctrlKey !== !!s.ctrl) return;
+        if (!!e.altKey !== !!s.alt) return;
+        if (e.shiftKey || e.metaKey) return;
+        if (e.key.toLowerCase() !== s.key.toLowerCase()) return;
+        e.preventDefault();
+        toggleSettings();
+      }
+
+      window.addEventListener('keydown', onShortcutKeydown);
+      window.addEventListener('keydown', onRecordKeydown); // 录制时 onShortcutKeydown 被短路，此处统一捕获
+      onUnmounted(() => {
+        window.removeEventListener('keydown', onShortcutKeydown);
+        window.removeEventListener('keydown', onRecordKeydown);
+      });
 
       function toggleMoreMenu(e) {
         if (moreMenuLeaving.value) return; // 退场动画期间忽略连点
@@ -121,14 +289,19 @@
         }
       }
 
-      /** 小火箭：点火发射动画 + 平滑回到顶部 */
+      /** 小火箭：点火发射动画 + 平滑回顶；动画播完再退场（suppressing 抑制期间滚动不重触发） */
       function launchRocket() {
         const btn = document.querySelector('.rocket-btn');
         if (btn && !btn.classList.contains('launching')) {
           btn.classList.add('launching');
           setTimeout(() => btn.classList.remove('launching'), 1000);
         }
+        rocketSuppressing = true; // 回顶是上行，不抑制会立刻自触复现（spec 第 2 节）
         window.scrollTo({ top: 0, behavior: 'smooth' });
+        setTimeout(() => {
+          rocketSuppressing = false;
+          rocketVisible.value = false; // 发射动画（0.95s）播完再播退场
+        }, 1050);
       }
 
       /**
@@ -176,6 +349,11 @@
         }
       }
 
+      /** 兜底固定色板（主题派生色板不可用时使用；正常由当前主题 primary 派生，随主题联动） */
+      const FALLBACK_NOTE_COLORS = ['#e6a23c', '#409eff', '#67c23a', '#f56c6c', '#9b59b6', '#1abc9c'];
+      /** 当前主题派生色板（applyTheme 时同步更新：负责人 hover 标签 / 备注作者色点共用） */
+      let notePalette = null;
+
       /**
        * 应用主题：注入 <style id="theme-style">（CSS 变量 + 结构性覆盖），立即生效并持久化选择
        */
@@ -188,6 +366,10 @@
         let st = document.getElementById('theme-style');
         if (!st) { st = document.createElement('style'); st.id = 'theme-style'; document.head.appendChild(st); }
         st.textContent = window.buildThemeCss(t);
+        // 同步 JS 侧主题和谐色板（与 buildThemeCss 同源派生）：负责人/备注作者色随主题联动
+        if (typeof window.deriveNotePalette === 'function' && t.vars && t.vars.primary) {
+          notePalette = window.deriveNotePalette(t.vars.primary);
+        }
       }
 
       /** 改造幕布层（复用节点） */
@@ -241,6 +423,49 @@
 
       /** 正在"渐隐"（仅剩一行时淡出）的行 id */
       const fadingBugId = ref(null);
+
+      // ==================== 滚动反馈（共用 rAF 节流监听：吸顶投影 + 小火箭显隐，spec 第 1/2 节） ====================
+      const stickyStuck = ref(false);
+      const rocketVisible = ref(false);
+      let scrollRafId = 0;
+      let lastScrollY = 0;
+      let rocketSuppressing = false; // 发射回顶期间抑制显隐判定（平滑滚动是上行，防自触复现）
+      let panelStickyEl = null;      // 吸顶区元素（onMounted 缓存）
+      let titlebarH = 0;             // 自绘标题栏高度（onMounted 量一次 DOM 真实值：0/浏览器、含 Electron 36——与 --titlebar-h 同源，裁决③真正单一事实源）
+
+      const ROCKET_PROGRESS = 0.2; // 滚动进度阈值 20%（退出线）
+      const ROCKET_UP_ENTER = 0.04; // 上行"进入缓冲"：显示线 = ROCKET_PROGRESS + 本值（滞后/迟滞，消除临界点一闪而过）
+      const ROCKET_MIN_Y = 120;    // 绝对下限：短内容瞄页脚不弹（spec 第 10 节裁决④）
+      const SCROLL_EPSILON = 2;    // 方向判定容差（防滚轮抖动翻转）
+
+      function onWinScroll() {
+        if (scrollRafId) return;
+        scrollRafId = requestAnimationFrame(() => {
+          scrollRafId = 0;
+          const y = window.scrollY;
+
+          // 吸顶投影：吸顶区顶缘贴到标题栏下沿（titlebarH 于 onMounted 量自 DOM 真实高度，与 --titlebar-h 同源）
+          if (panelStickyEl) {
+            stickyStuck.value = panelStickyEl.getBoundingClientRect().top <= titlebarH + 1;
+          }
+
+          // 小火箭状态机：显示=上行 且 进度越过(20%+进入缓冲) 且 过绝对下限；隐藏=下行 或 退回20%以内 / 低于下限（滞后消除临界一闪而过）
+          if (!rocketSuppressing) {
+            const max = document.documentElement.scrollHeight - window.innerHeight;
+            const progress = max > 0 ? y / max : 0;
+            const goingUp = y < lastScrollY - SCROLL_EPSILON;
+            const goingDown = y > lastScrollY + SCROLL_EPSILON;
+            // 进入(显示)线高于退出(隐藏)线 = 迟滞：上滑"预判"会回到 20% 顶区则不显示，避免临界点闪现一帧
+            const showEdge = ROCKET_PROGRESS + ROCKET_UP_ENTER;
+            if (goingUp && y > ROCKET_MIN_Y && progress > showEdge) {
+              rocketVisible.value = true;
+            } else if (goingDown || progress <= ROCKET_PROGRESS || y <= ROCKET_MIN_Y) {
+              rocketVisible.value = false;
+            }
+          }
+          lastScrollY = y;
+        });
+      }
 
       /** 刚插入、播放生长动画的行 id */
       const enteringBugId = ref(null);
@@ -600,7 +825,7 @@
       /** 筛选并排序后的 任务列表（先筛选再排序，同状态保持原序） */
       const filteredAndSortedBugs = computed(() => {
         const bugs = currentTask.value?.bugs || [];
-        let list = bugs;
+        let list = bugs.filter(b => !b.archived); // 归档行不进主列表/筛选/搜索/计数（spec 第 7 节）
         // 筛选
         if (statusFilter.value !== '全部') {
           list = list.filter(b => b.status === statusFilter.value);
@@ -626,13 +851,50 @@
 
       /** 各状态任务数量（用于筛选按钮显示） */
       const statusCounts = computed(() => {
-        const bugs = currentTask.value?.bugs || [];
+        const bugs = (currentTask.value?.bugs || []).filter(b => !b.archived); // 归档不计数（spec 第 7 节）
         const counts = { '全部': bugs.length };
         statusOptions.forEach(opt => {
           counts[opt] = bugs.filter(b => b.status === opt).length;
         });
         return counts;
       });
+
+      // ==================== 归档体系（spec 第 7 节） ====================
+      const archivedBugs = computed(() => {
+        const bugs = currentTask.value?.bugs || [];
+        return bugs.filter(b => b.archived).sort((a, b) => (b.archivedAt || 0) - (a.archivedAt || 0)); // 最新归档在顶卡
+      });
+      const archiveExpanded = ref(false); // 纯本地 UI 状态，不广播不同步
+      const archiveFlash = ref(false);    // 归档入堆时堆计数闪烁
+
+      function toggleArchive() { archiveExpanded.value = !archiveExpanded.value; }
+
+      /** 归档：仅已完成（服务端防线同规则）；复用删除渐隐 220ms 后出列入堆 */
+      function archiveBug(bug) {
+        if (bug.status !== '已完成' || bug.archived === true) return;
+        if (dyingBugId.value || fadingBugId.value) return; // 与删除动画互斥（同 confirmDeleteBug 守卫）
+        const targetTaskId = currentTaskId.value; // 定格点击时所属项目，防 220ms 内切项目致广播发往错项目（审查#2）
+        fadingBugId.value = bug.id;
+        setTimeout(() => {
+          fadingBugId.value = null;
+          // 220ms 内可能经历 fullSync（bugs 换成 spread 副本）或切项目：按 id 在定格项目里重查活对象，避免写到孤儿（审查#1）
+          const live = tasks.value.find(t => t.id === targetTaskId)?.bugs.find(b => b.id === bug.id);
+          if (!live) return; // 原对象已失效（被删 / 项目消失）：放弃本地归档，服务端仍会广播权威态
+          live.archived = true;
+          live.archivedAt = Date.now();
+          sendUpdate(live.id, 'archived', true, targetTaskId);
+          archiveFlash.value = true;
+          setTimeout(() => { archiveFlash.value = false; }, 700);
+        }, 220);
+      }
+
+      /** 恢复：回主列表已完成组（statusChangedAt 不变，原位排序） */
+      function restoreBug(bug) {
+        if (bug.archived !== true) return;
+        bug.archived = false;
+        delete bug.archivedAt;
+        sendUpdate(bug.id, 'archived', false);
+      }
 
       // ==================== WebSocket 连接 ====================
 
@@ -748,11 +1010,11 @@
       /**
        * 发送更新消息
        */
-      function sendUpdate(bugId, field, value) {
+      function sendUpdate(bugId, field, value, taskId = currentTaskId.value) {
         sendMessage({
           type: 'update',
           clientId,
-          data: { taskId: currentTaskId.value, bugId, field, value },
+          data: { taskId, bugId, field, value },
         });
       }
 
@@ -806,6 +1068,7 @@
        * 处理全量同步
        */
       function handleFullSync(msg) {
+        archiveExpanded.value = false; // 全量同步收起归档展开（裁决⑥）
         if (msg.data && Array.isArray(msg.data.tasks)) {
           // 合并式应用：保留在途编辑的对象引用，避免输入框绑定对象被整体替换导致内容丢失
           const incomingTasks = msg.data.tasks;
@@ -877,7 +1140,7 @@
 
         if (!msg.change) return;
 
-        const { type, taskId, bugId, field, value, completedAt, statusChangedAt } = msg.change;
+        const { type, taskId, bugId, field, value, completedAt, statusChangedAt, archivedAt } = msg.change;
         console.log(`[WS] 收到广播: type=${type}, taskId=${taskId?.substring(0,8)}, bugId=${bugId}, field=${field}, value=${value}, completedAt=${completedAt}, 来源=${(msg.originClientId || '?').substring(0,8)}`);
 
         switch (type) {
@@ -885,7 +1148,7 @@
             handleRemoteAdd(msg);
             break;
           case 'update':
-            handleRemoteUpdate(taskId, bugId, field, value, completedAt, statusChangedAt);
+            handleRemoteUpdate(taskId, bugId, field, value, completedAt, statusChangedAt, archivedAt);
             break;
           case 'delete':
             handleRemoteDelete(taskId, bugId);
@@ -948,7 +1211,7 @@
       /**
        * 处理远程更新
        */
-      function handleRemoteUpdate(taskId, bugId, field, value, completedAt, statusChangedAt) {
+      function handleRemoteUpdate(taskId, bugId, field, value, completedAt, statusChangedAt, archivedAt) {
         const task = tasks.value.find(t => t.id === taskId);
         if (!task) {
           console.log(`[WS] handleRemoteUpdate: taskId=${taskId?.substring(0,8)} 未找到，请求全量同步`);
@@ -963,7 +1226,7 @@
         }
 
         // 第三层防护：新旧值相同时跳过
-        if (bug[field] === value && completedAt === undefined && statusChangedAt === undefined) {
+        if (bug[field] === value && completedAt === undefined && statusChangedAt === undefined && archivedAt === undefined) {
           console.log(`[WS] handleRemoteUpdate: bugId=${bugId} ${field} 值相同，跳过 (${value})`);
           return;
         }
@@ -983,6 +1246,14 @@
         // 同步 statusChangedAt（组内排序依据：新来的往组末尾）
         if (statusChangedAt !== undefined) {
           bug.statusChangedAt = statusChangedAt;
+        }
+        // 同步 archivedAt（归档时间锚点；null = 恢复时删除，与归档/恢复字段配套广播）
+        if (archivedAt !== undefined) {
+          if (archivedAt === null) {
+            delete bug.archivedAt;
+          } else {
+            bug.archivedAt = archivedAt;
+          }
         }
       }
 
@@ -1431,8 +1702,40 @@
         });
       }
 
+      // ==================== 深夜彩蛋（0.3 收尾）：正向推进状态 + 20:00-05:00 → 弹一句安慰 ====================
+
+      /** 深夜语录池（随机一条；emoji 开头，暖而不油） */
+      const LATE_NIGHT_QUOTES = [
+        '🌙 这么晚还在认真工作，你真的超棒！',
+        '🌃 深夜赶工辛苦了，改完这一条就早点休息吧～',
+        '⭐ 夜里走的一小步，都是明天的一大步。加油！',
+        '✨ 凌晨的努力不会被辜负，加油！',
+        '☕ 夜深了，喝口热水缓一缓，别太拼啦。',
+        '🔥 深夜还能保持状态，这就是你的实力！',
+      ];
+
+      /**
+       * 深夜彩蛋：状态正向推进（待修复→修复中 / 修复中→已完成）且当前时间在 20:00-次日 05:00 之间时，
+       * 弹一句安慰/励志语录。复用 ElMessage 小提示样式（右上角、不打断操作、4.5s 自动消失、主题联动）。
+       */
+      function maybeLateNightCheer(oldStatus, newStatus) {
+        const forward = (oldStatus === '待修复' && newStatus === '修复中') || (oldStatus === '修复中' && newStatus === '已完成');
+        if (!forward) return;
+        const hour = new Date().getHours();
+        if (!(hour >= 20 || hour < 5)) return;
+        const quote = LATE_NIGHT_QUOTES[Math.floor(Math.random() * LATE_NIGHT_QUOTES.length)];
+        ElementPlus.ElMessage({
+          message: Vue.h('div', { class: 'late-night-msg' }, quote),
+          duration: 4500,
+          showClose: false,
+          offset: 50, // 距顶部 50px（75 上移 25）
+          customClass: 'late-night-toast',
+        });
+      }
+
       function onStatusChange(bug, newStatus) {
         if (bug.status === newStatus) return;
+        maybeLateNightCheer(bug.status, newStatus); // 深夜彩蛋（只在自己操作时触发，随广播不重复弹）
 
         // 筛选视图：飞向目标 tag
         const rowEl = document.querySelector('.bug-row[data-bug-id="' + bug.id + '"]');
@@ -1492,12 +1795,16 @@
 
       /**
        * 完成编辑名称
+       * @param {object} bug
+       * @param {boolean} [openNext] 回车确认时 true：标题提交后引出"下一步"小面板（deadline / 备注询问）
+       *                            blur 失焦提交不引（安静路径，用户已移开焦点）
        */
-      function finishEditName(bug) {
+      function finishEditName(bug, openNext) {
         editingBugId.value = null;
-        // 值无变化则跳过
+        // 值无变化则跳过（含空标题直接回车：不提交也不引面板）
         if (bug.name === editNameBackup) return;
         sendUpdate(bug.id, 'name', bug.name);
+        if (openNext && bug.name.trim()) openNextStep(bug);
       }
 
       /**
@@ -1518,12 +1825,15 @@
           return;
         }
 
+        // 负责人自动归属（0.3 体验小点）：谁新建的就是谁的；名字未填时只存 clientId（显示层兜底"我"/clientId 前缀，与备注作者一致）
+        const assigneeName = displayName.value.trim();
         const newBug = {
           id: randomUUID(),
           name: '',
           status: '待修复',
           images: [],
           statusChangedAt: Date.now(), // 组内排序依据：新来的往组末尾
+          assignee: { clientId: clientId, name: assigneeName || null },
         };
 
         task.bugs.push(newBug);
@@ -1546,6 +1856,105 @@
         nextTick(() => {
           startEditName(newBug);
         });
+      }
+
+      // ==================== 新增任务"下一步"小面板（0.3 体验小点：deadline / 备注询问） ====================
+
+      /** 正在显示"下一步"面板的任务行 id（null = 无） */
+      const nextStepBugId = ref(null);
+      /** 面板：是否勾选 deadline（勾选展开时间选择器） */
+      const nsDeadlineOn = ref(false);
+      /** 面板：已选 deadline 时间戳（毫秒） */
+      const nsDeadline = ref(null);
+      /** 面板：是否勾选备注（勾选展开输入框） */
+      const nsNoteOn = ref(false);
+      /** 面板：备注文本 */
+      const nsNoteText = ref('');
+      /** 面板：出场动画进行中（关闭时先播动画再清状态） */
+      const nsClosing = ref(false);
+      /** 工时评估浮层：可见 / 出场动画中 */
+      const nsHoursVisible = ref(false);
+      const nsHoursClosing = ref(false);
+
+      /** 打开"下一步"面板（重置状态；行内回车确认标题后调用） */
+      function openNextStep(bug) {
+        nsClosing.value = false;
+        nsDeadlineOn.value = false;
+        nsDeadline.value = null;
+        nsNoteOn.value = false;
+        nsNoteText.value = '';
+        nextStepBugId.value = bug.id;
+      }
+
+      /** 关闭"下一步"面板：加出场动画类（0.25s），animationend 后清状态 */
+      function closeNextStep() {
+        if (nextStepBugId.value === null) return;
+        nsClosing.value = true;
+      }
+
+      /** 面板出场动画结束（入场动画结束也会触发，但此时 nsClosing=false 不清理，安全） */
+      function onNextStepAnimEnd() {
+        if (nsClosing.value) {
+          nextStepBugId.value = null;
+          nsClosing.value = false;
+        }
+      }
+
+      /**
+       * 打开工时评估浮层（点"此刻"）：deadline 不可能等于现在，改为评估所需工时
+       */
+      function openHoursPicker() {
+        nsHoursVisible.value = true;
+      }
+
+      /**
+       * 选择所需天数：deadline = 当前时间 + N 天（保留钟点），自动填好并收起浮层
+       * @param {number} days 1-5
+       */
+      function applyHoursDays(days) {
+        nsDeadline.value = Date.now() + days * 24 * 60 * 60 * 1000;
+        closeHoursPicker();
+      }
+
+      /** 收起工时评估浮层（先播出场动画，animationend 后清状态） */
+      function closeHoursPicker() {
+        if (!nsHoursVisible.value) return;
+        nsHoursClosing.value = true;
+      }
+
+      /** 工时评估浮层出场动画结束（入场动画结束也会触发，nsHoursClosing=false 不清理，安全） */
+      function onHoursAnimEnd() {
+        if (nsHoursClosing.value) {
+          nsHoursVisible.value = false;
+          nsHoursClosing.value = false;
+        }
+      }
+
+      /**
+       * 格式化 deadline 时间戳 → "YYYY-MM-DD HH:mm"（备注文案用）
+       */
+      function formatDeadline(ts) {
+        if (typeof ts !== 'number') return '';
+        const d = new Date(ts);
+        const p = (n) => String(n).padStart(2, '0');
+        return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+      }
+
+      /**
+       * 面板"确定"：按勾选落库
+       * - deadline 勾选且已选时间 → bug.deadline 结构化字段（update 广播，未来逾期/排序可用）+ 自动代发一条备注
+       * - 备注勾选且有内容 → 发一条备注
+       */
+      function confirmNextStep(bug) {
+        if (nsDeadlineOn.value && typeof nsDeadline.value === 'number') {
+          bug.deadline = nsDeadline.value;
+          sendUpdate(bug.id, 'deadline', nsDeadline.value);
+          pushBugNote(bug, '该任务启用 deadline：' + formatDeadline(nsDeadline.value));
+        }
+        if (nsNoteOn.value && nsNoteText.value.trim()) {
+          pushBugNote(bug, nsNoteText.value.trim());
+        }
+        closeNextStep();
       }
 
       /**
@@ -1704,23 +2113,25 @@
       /** 正在编辑名称的任务 ID */
       const editingTaskId = ref(null);
       const editingTaskName = ref('');
+      let renamingNewTask = null; // 新建项目两步式提交标记 { id, prevTaskId } | null（spec 第 4 节）
 
       /**
-       * 新建项目（标签栏顶部层级，含条目列表）
+       * 新建项目（本地先行两步式，spec 第 4 节）：只在本地建临时项进入命名，
+       * 确认非空才广播 createTask；临时项期间不广播、不写 currentTask 持久化（裁决⑤，中途关窗不留脏指针）
        */
       function createTask() {
+        const prevTaskId = currentTaskId.value;
         const task = {
           id: randomUUID(),
-          name: '新项目',
+          name: '',
           bugs: [],
         };
         tasks.value.push(task);
         currentTaskId.value = task.id;
-        persistCurrentTask();
-        sendMessage({ type: 'createTask', clientId, data: { task: { id: task.id, name: task.name } } });
-        // 自动进入编辑模式
+        renamingNewTask = { id: task.id, prevTaskId };
+        // 自动进入命名（placeholder 模式：空值 + 灰字「新项目」）
         nextTick(() => {
-          startRenameTask(task);
+          startRenameTask(task, { placeholderMode: true });
         });
       }
 
@@ -1729,6 +2140,7 @@
        */
       function switchTask(taskId) {
         if (currentTaskId.value === taskId) return; // 点当前项目不重播
+        archiveExpanded.value = false; // 切项目收起归档展开（裁决⑥）
         const ids = orderedTasks.value.map(t => t.id);
         const oldIdx = ids.indexOf(currentTaskId.value);
         const newIdx = ids.indexOf(taskId);
@@ -1760,27 +2172,44 @@
       }
 
       /**
-       * 开始重命名任务
+       * 开始重命名任务（placeholderMode=新建项目命名：空值不 select，靠 placeholder 提示）
+       * 修复：模板中输入框容器类名是 .task-tab-edit（index.html:157），旧选择器 .task-name-edit 一直匹配不到，
+       *       导致聚焦/全选静默失效；此处更正为 .task-tab-edit input。
        */
-      function startRenameTask(task) {
-        editingTaskName.value = task.name;
+      function startRenameTask(task, { placeholderMode = false } = {}) {
+        editingTaskName.value = placeholderMode ? '' : task.name;
         editingTaskId.value = task.id;
         nextTick(() => {
-          const input = document.querySelector('.task-name-edit input');
+          const input = document.querySelector('.task-tab-edit input');
           if (input) {
             input.focus();
-            input.select();
+            if (!placeholderMode) input.select();
           }
         });
       }
 
       /**
-       * 完成重命名任务
+       * 完成重命名（Enter/失焦）。新建路径走两步式提交：非空→一条 createTask 广播（带最终名）；
+       * 空名→本地丢弃临时项（等于从未发生）；老项目重命名逻辑原样保留
        */
       function finishRenameTask(task) {
         if (!task) return;
         const newName = editingTaskName.value.trim();
         editingTaskId.value = null;
+
+        if (renamingNewTask && renamingNewTask.id === task.id) {
+          const { prevTaskId } = renamingNewTask;
+          renamingNewTask = null;
+          if (!newName) {
+            discardNewTask(task, prevTaskId);
+            return;
+          }
+          task.name = newName;
+          persistCurrentTask(); // 确认后才写持久化（裁决⑤）
+          sendMessage({ type: 'createTask', clientId, data: { task: { id: task.id, name: task.name } } });
+          return;
+        }
+
         if (!newName || newName === task.name) return;
         const dup = tasks.value.some(t => t.id !== task.id && t.name === newName);
         if (dup) {
@@ -1790,24 +2219,49 @@
         sendMessage({ type: 'updateTask', clientId, data: { taskId: task.id, field: 'name', value: newName } });
       }
 
+      /** 丢弃未命名的本地临时项目：移除 + 还原当前项目（persist 值从未写过 temp id，无需清理） */
+      function discardNewTask(task, prevTaskId) {
+        const index = tasks.value.findIndex(t => t.id === task.id);
+        if (index !== -1) tasks.value.splice(index, 1);
+        currentTaskId.value = prevTaskId;
+      }
+
       /**
-       * 取消重命名任务
+       * 取消重命名（Esc）。新建路径同空名：本地丢弃临时项
        */
       function cancelRenameTask() {
+        if (renamingNewTask && renamingNewTask.id === editingTaskId.value) {
+          const task = tasks.value.find(t => t.id === renamingNewTask.id);
+          const { prevTaskId } = renamingNewTask;
+          renamingNewTask = null;
+          editingTaskId.value = null;
+          editingTaskName.value = '';
+          if (task) discardNewTask(task, prevTaskId);
+          return;
+        }
         editingTaskId.value = null;
         editingTaskName.value = '';
       }
 
       /**
-       * 删除项目（至少保留一个；删项目连带清理其下所有任务的图片）
+       * 删除项目（二次确认，spec 第 3 节；项目级删除豁免任务级"已完成不可删"防线——裁决①，
+       * 有 ElMessageBox 确认 + 服务端删前快照兜底）
        */
-      function deleteTask(taskId) {
+      async function deleteTask(taskId) {
         if (tasks.value.length <= 1) {
           ElementPlus.ElMessage.warning('至少保留一个项目');
           return;
         }
         const task = tasks.value.find(t => t.id === taskId);
         if (!task) return;
+        const bugCount = (task.bugs || []).length;
+        try {
+          await ElementPlus.ElMessageBox.confirm(
+            `将删除项目「${task.name}」及其下 ${bugCount} 个任务（含已完成与已归档）、全部备注与图片。确定删除？`,
+            '删除项目',
+            { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消', confirmButtonClass: 'el-button--danger' }
+          );
+        } catch (err) { return; } // 用户取消
         const index = tasks.value.findIndex(t => t.id === taskId);
         if (index !== -1) {
           tasks.value.splice(index, 1);
@@ -2110,20 +2564,28 @@
         return !!(note && note.createdAt && note.updatedAt && note.updatedAt > note.createdAt + 1000);
       }
 
-      /** 备注作者颜色调色板 */
-      const NOTE_COLORS = ['#e6a23c', '#409eff', '#67c23a', '#f56c6c', '#9b59b6', '#1abc9c'];
-
       /**
-       * 根据 clientId 返回一个稳定的颜色
+       * 根据 clientId 返回一个稳定的颜色（当前主题和谐色板；主题切换后颜色随之变化，与负责人 hover 标签同源）
        */
       function getNoteColor(clientId) {
-        if (!clientId) return NOTE_COLORS[0];
+        const palette = notePalette || FALLBACK_NOTE_COLORS;
+        if (!clientId) return palette[0];
         let hash = 0;
         for (let i = 0; i < clientId.length; i++) {
           hash = ((hash << 5) - hash) + clientId.charCodeAt(i);
           hash |= 0;
         }
-        return NOTE_COLORS[Math.abs(hash) % NOTE_COLORS.length];
+        return palette[Math.abs(hash) % palette.length];
+      }
+
+      /**
+       * 负责人显示名（0.3）：优先存的名字快照；未填名字时自己显示"我"、他人显示 clientId 前 8 位（与备注作者兜底一致）
+       */
+      function assigneeLabel(bug) {
+        const a = bug?.assignee;
+        if (!a || !a.clientId) return '';
+        if (a.name) return a.name;
+        return a.clientId === clientId ? '我' : a.clientId.substring(0, 8);
       }
 
       // ==================== 任务备注操作 ====================
@@ -2149,6 +2611,29 @@
         bugNotesTaskId.value = taskId;
         bugNotesBugId.value = bugId;
         bugNotesVisible.value = true;
+      }
+
+      /**
+       * 发送一条任务级备注（公共路径：备注弹窗 / 新增任务"下一步"面板共用）
+       * 本地立即追加 + WS addBugNote 广播；作者 = 当前用户；无图
+       * @param {object} bug
+       * @param {string} content
+       */
+      function pushBugNote(bug, content) {
+        if (!bug || !content || !content.trim()) return;
+        const task = currentTask.value;
+        if (!task) return;
+        if (!bug.notes) bug.notes = [];
+        const note = {
+          id: randomUUID(),
+          clientId: clientId,
+          content: content.trim(),
+          createdAt: Date.now(), // 创建时间锚点（判断"已修改"）
+          updatedAt: Date.now(),
+          authorName: displayName.value.trim() || null,
+        };
+        bug.notes.push(note);
+        sendMessage({ type: 'addBugNote', clientId, data: { taskId: task.id, bugId: bug.id, note } });
       }
 
       /**
@@ -3164,17 +3649,26 @@
         initStartup();
         // 注册全局粘贴事件监听（仅粘贴对话框打开时生效）
         document.addEventListener('paste', onGlobalPaste);
-        // 注册全局 Esc 监听（仅查看器打开时生效，用于关闭大图预览）
+        // 注册全局 Esc 监听（仅查看器打开时生效，用于关闭大图预览；onGlobalKeydown 即查看器 Esc 处理器）
         document.addEventListener('keydown', onGlobalKeydown);
+        // 桌面版：把本机保存的快捷键同步给主进程（globalShortcut 注册窗口切换热键）
+        syncShortcutToMain();
         // 宽窗口标记
         updW();
         window.addEventListener('resize', updW);
+        // 滚动反馈：吸顶投影 + 小火箭（passive，rAF 节流见 onWinScroll）
+        panelStickyEl = document.querySelector('.panel-sticky');
+        titlebarH = document.querySelector('.win-titlebar')?.offsetHeight || 0; // 量 DOM 真实高度（裁决③：DOM 成唯一事实源，浏览器无此元素→0）
+        window.addEventListener('scroll', onWinScroll, { passive: true });
+        onWinScroll(); // 首屏主动校准一次，消除无 scroll 事件时（如会话恢复滚动位置）投影/火箭的一帧滞后（审查#3）
       });
 
       onUnmounted(() => {
         document.removeEventListener('paste', onGlobalPaste);
         document.removeEventListener('keydown', onGlobalKeydown);
         window.removeEventListener('resize', updW);
+        window.removeEventListener('scroll', onWinScroll);
+        if (scrollRafId) { cancelAnimationFrame(scrollRafId); scrollRafId = 0; }
         if (reconnectTimer) {
           clearTimeout(reconnectTimer);
           reconnectTimer = null;
@@ -3190,7 +3684,24 @@
 
       return {
         // 启动模式对话框
+        // 启动模式选择
         showStartupDialog,
+        // Electron 自绘标题栏（窗口控制）
+        isElectron,
+        stickyStuck,
+        rocketVisible,
+        archivedBugs,
+        archiveExpanded,
+        archiveFlash,
+        toggleArchive,
+        archiveBug,
+        restoreBug,
+        winAlwaysOnTop,
+        winMaximized,
+        winMinimize,
+        winMaximizeToggle,
+        winClose,
+        toggleAlwaysOnTop,
         startupMode,
         startupAddressInput,
         displayName,
@@ -3230,6 +3741,19 @@
         exportData,
         onImportFileSelect,
         launchRocket,
+
+        // 设置面板 + 快捷键
+        settingsVisible,
+        settingsClosing,
+        shortcutRecording,
+        shortcutDraft,
+        shortcut,
+        openSettings,
+        closeSettings,
+        onSettingsAnimEnd,
+        startRecordShortcut,
+        confirmSettings,
+        shortcutLabel,
 
         // 搜索
         searchText,
@@ -3326,6 +3850,25 @@
         startEditName,
         finishEditName,
         cancelEditName,
+
+        // 新增任务"下一步"面板（deadline / 备注询问）
+        nextStepBugId,
+        nsDeadlineOn,
+        nsDeadline,
+        nsNoteOn,
+        nsNoteText,
+        nsClosing,
+        nsHoursVisible,
+        nsHoursClosing,
+        openNextStep,
+        closeNextStep,
+        confirmNextStep,
+        onNextStepAnimEnd,
+        openHoursPicker,
+        applyHoursDays,
+        closeHoursPicker,
+        onHoursAnimEnd,
+        formatDeadline,
         addBug,
         deleteBug,
         onDelDown,
@@ -3356,6 +3899,7 @@
         // 任务备注方法
         getNoteWriters,
         getNoteColor,
+        assigneeLabel,
         openNotesDialog,
         editingTaskNoteId,
         startEditTaskNote,

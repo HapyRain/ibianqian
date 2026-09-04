@@ -1,14 +1,15 @@
 {
   "name": "ibianqian-buglist",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "多人协同 Bug 清单工具",
+  "author": "HapyRain",
   "main": "electron/main.js",
   "scripts": {
     "start": "node server.js",
     "dev": "node --watch server.js",
     "electron": "electron .",
     "build": "electron-builder --win portable --config electron-builder.yml",
-    "test": "node test-validation-guards.js && node test-image-lifecycle.js && node test-note-image.js && node test-note-ownership.js && node test-template-guard.js",
+    "test": "node test-validation-guards.js && node test-image-lifecycle.js && node test-note-image.js && node test-note-ownership.js && node test-template-guard.js && node test-archive-guards.js",
     "postinstall": "node build/setup-7za-proxy.js"
   },
   "dependencies": {

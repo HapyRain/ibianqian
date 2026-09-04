@@ -16,6 +16,28 @@
 </head>
 <body>
   <div id="app">
+    <!-- Electron 自绘标题栏（frame:false 后承载拖拽与窗口控制：置顶 / 最小化 / 最大化还原 / 关闭；浏览器版不显示） -->
+    <div v-if="isElectron" class="win-titlebar">
+      <div class="win-titlebar-drag">
+        <img src="/favicon.ico" class="win-titlebar-ico" alt="" />
+        <span class="win-titlebar-app">任务清单</span>
+      </div>
+      <div class="win-titlebar-btns">
+        <button class="win-btn win-btn-pin" :class="{ on: winAlwaysOnTop }" @click="toggleAlwaysOnTop" :title="winAlwaysOnTop ? '取消置顶' : '窗口置顶'" :aria-label="winAlwaysOnTop ? '取消置顶' : '窗口置顶'">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M8.5 4h7v2.4h-7z"/><path d="M7 7.6h10v2.2a5 5 0 01-2.6 4.4L12 15l-2.4-.8A5 5 0 017 9.8z"/><path d="M12 15v5"/></svg>
+        </button>
+        <button class="win-btn" @click="winMinimize" title="最小化" aria-label="最小化">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M5 12h14"/></svg>
+        </button>
+        <button class="win-btn" @click="winMaximizeToggle" :title="winMaximized ? '还原' : '最大化'" :aria-label="winMaximized ? '还原' : '最大化'">
+          <svg v-if="!winMaximized" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="5" width="14" height="14" rx="1.5"/></svg>
+          <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="7" y="7" width="10" height="10" rx="1.5"/><path d="M9.5 7V5.5h9v9H16"/></svg>
+        </button>
+        <button class="win-btn win-btn-close" @click="winClose" title="关闭（最小化到托盘）" aria-label="关闭">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+        </button>
+      </div>
+    </div>
     <!-- 启动模式选择对话框 -->
     <div class="startup-overlay" v-if="showStartupDialog">
       <div class="startup-dialog">
@@ -109,7 +131,7 @@
             </button>
           </span>
           <span class="theme-box">
-            <button class="theme-btn" @click="toggleMoreMenu($event)" title="更多操作（导出/导入数据）" aria-label="更多操作">
+            <button class="theme-btn" @click="toggleMoreMenu($event)" title="更多设置（导出/导入/设置）" aria-label="更多设置">
               <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="5.5" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="12" cy="18.5" r="1.6"/></svg>
             </button>
           </span>
@@ -135,6 +157,7 @@
             <span v-if="editingTaskId === task.id" class="task-tab-edit" @click.stop>
               <input
                 v-model="editingTaskName"
+                placeholder="新项目"
                 @blur="finishRenameTask(task)"
                 @keyup.enter="finishRenameTask(task)"
                 @keyup.escape="cancelRenameTask()"
@@ -167,6 +190,8 @@
 
       <!-- 任务列表卡片：搜索条 + 筛选/新增 + 任务列表（主体） -->
       <div class="bug-panel">
+      <!-- 吸顶区（搜索 + 筛选/新增）：页面滚动时固定在视口顶部；项目栏/顶栏随页面滚走 -->
+      <div class="panel-sticky" :class="{ 'is-stuck': stickyStuck }">
       <!-- 搜索条：单独一行 -->
       <div class="search-bar">
         <el-input v-model="searchText" size="large" clearable placeholder="搜索任务名称…" class="search-input-big">
@@ -199,6 +224,7 @@
           <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.5"/><path d="M12 8.5v7M8.5 12h7"/></svg><span class="btn-label">新增任务</span>
         </el-button>
       </div>
+      </div><!-- /panel-sticky（搜索 + 筛选吸顶区） -->
 
       <!-- 列表区：任务行（主体） -->
       <div class="bug-list" :class="{ 'bug-list-wide': isWideWindow }">
@@ -211,9 +237,11 @@
           class="bug-row"
           :class="{ 'bug-row-spotlight': confirmBugId === bug.id, 'bug-row-dying': dyingBugId === bug.id, 'bug-row-fade': fadingBugId === bug.id, 'row-enter': enteringBugId === bug.id }"
         >
+          <!-- 负责人 hover 标签（0.3 体验小点）：平时隐藏不"公示"，悬停行时淡入浮出——小团队收敛，划过去知道是谁就行；颜色 = getNoteColor(clientId) 个人色，与备注作者同族 -->
+          <span v-if="bug.assignee && bug.assignee.clientId" class="assignee-tag" :style="{ '--assignee-color': getNoteColor(bug.assignee.clientId) }">{{ assigneeLabel(bug) }}</span>
           <div class="bug-cell bug-name" @dblclick="startEditName(bug)">
             <el-input v-if="editingBugId === bug.id" :model-value="bug.name" @update:model-value="bug.name = $event"
-              size="small" placeholder="请输入任务名称" @blur="finishEditName(bug)" @keyup.enter="finishEditName(bug)" @keyup.escape="cancelEditName(bug)" ></el-input>
+              size="small" placeholder="请输入任务名称" @blur="finishEditName(bug)" @keyup.enter="finishEditName(bug, true)" @keyup.escape="cancelEditName(bug)" ></el-input>
             <span v-else class="name-text" :class="{ 'name-placeholder': !bug.name }">{{ bug.name || '双击编辑名称...' }}</span>
           </div>
           <div class="bug-cell bug-shots" @dragover="onDragOver" @dragleave="onDragLeave" @drop="onDrop($event, bug.id)">
@@ -265,7 +293,11 @@
             </button>
           </div>
           <div class="bug-cell bug-actions">
-            <button class="btn-del" @mousedown="onDelDown(bug, $event)" @mouseup="onDelUp(bug, $event)" aria-label="删除该任务" title="删除该任务">
+            <!-- 已完成：归档按钮（单击可逆，无确认；服务端拒删已完成，spec 第 7 节） -->
+            <button v-if="bug.status === '已完成'" class="btn-archive" @click.stop="archiveBug(bug)" aria-label="归档该任务" title="归档（列表底部归档堆可找回/恢复）">
+              <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="4.5" rx="1.2"/><path d="M5 8.5V19a1.5 1.5 0 001.5 1.5h11A1.5 1.5 0 0019 19V8.5"/><path d="M9.8 12.5h4.4"/></svg>
+            </button>
+            <button v-else class="btn-del" @mousedown="onDelDown(bug, $event)" @mouseup="onDelUp(bug, $event)" aria-label="删除该任务" title="删除该任务">
               <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16"/><path d="M9 7V4.5h6V7"/><path d="M6 7l1 13h10l1-13"/><path d="M10 11v6M14 11v6"/></svg>
             </button>
             <span class="del-confirm" :class="{show: confirmBugId===bug.id}">
@@ -274,12 +306,89 @@
               <button class="no" @click.stop="cancelDeleteConfirm()">取消</button>
             </span>
           </div>
+          <!-- 新增任务"下一步"面板（回车确认标题后引出：deadline / 备注询问；勾选即展开对应输入；跳过/确定收场；入场/出场 0.25s 统一） -->
+          <div v-if="nextStepBugId === bug.id" class="next-step" :class="{ 'next-step-closing': nsClosing }" @animationend="onNextStepAnimEnd">
+            <div class="ns-title">任务已创建，是否补充？</div>
+            <div class="ns-opt" :class="{ on: nsDeadlineOn }" @click="nsDeadlineOn = !nsDeadlineOn">
+              <span class="ns-check"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></span>
+              <span class="ns-opt-label">设置 deadline</span>
+            </div>
+            <div v-if="nsDeadlineOn" class="ns-body">
+              <div class="ns-picker-row">
+                <el-date-picker v-model="nsDeadline" type="datetime" placeholder="选择截止时间" format="YYYY-MM-DD HH:mm" value-format="x" size="small" popper-class="ns-picker-popper" :clearable="false" :editable="false"></el-date-picker>
+                <button class="ns-now" @click="openHoursPicker()">此刻</button>
+              </div>
+            </div>
+            <div class="ns-opt" :class="{ on: nsNoteOn }" @click="nsNoteOn = !nsNoteOn">
+              <span class="ns-check"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></span>
+              <span class="ns-opt-label">添加备注</span>
+            </div>
+            <div v-if="nsNoteOn" class="ns-body">
+              <el-input v-model="nsNoteText" placeholder="写点什么…" size="small" @keyup.enter.stop="confirmNextStep(bug)"></el-input>
+            </div>
+            <div class="ns-actions">
+              <button class="ns-skip" @click="closeNextStep()">跳过</button>
+              <button class="ns-ok" @click="confirmNextStep(bug)">确定</button>
+            </div>
+            <!-- 工时评估浮层（点"此刻"弹出：deadline 不可能=现在，按所需工时自动算好日期；入场/出场 0.25s 同缓动） -->
+            <div v-if="nsHoursVisible" class="ns-hours" :class="{ 'ns-hours-closing': nsHoursClosing }" @animationend="onHoursAnimEnd" @click.self="closeHoursPicker()">
+              <div class="ns-hours-box">
+                <div class="ns-hours-title">请评估所需工时 🌙</div>
+                <div class="ns-hours-opts">
+                  <button v-for="d in [1,2,3,4,5]" :key="d" class="ns-hours-day" @click="applyHoursDays(d)">{{ d }} 天</button>
+                </div>
+                <button class="ns-hours-cancel" @click="closeHoursPicker()">取消</button>
+              </div>
+            </div>
+          </div>
         </div>
         </TransitionGroup>
         <div v-if="!filteredAndSortedBugs.length" class="empty-state">
           <span class="empty-icon"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="3" width="14" height="18" rx="2.5"/><path d="M9 3v2h6V3"/><path d="M8 10h8M8 14h5"/></svg></span>
           <p>暂无任务记录</p>
           <p class="empty-hint">点击「新增任务」开始记录</p>
+        </div>
+        <!-- 归档区（spec 第 7 节、裁决②）：沉面板底（margin-top:auto）；N=0 整区不渲染 -->
+        <div v-if="archivedBugs.length" class="archive-zone">
+          <button class="archive-header" :class="{ 'archive-flash': archiveFlash }" @click="toggleArchive" :title="archiveExpanded ? '收起归档' : '展开归档'">
+            <svg class="icon arch-box" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 13V7a2 2 0 012-2h12a2 2 0 012 2v6"/><path d="M4 13h5l1.5 2.5h3L15 13h5v4a2 2 0 01-2 2H6a2 2 0 01-2-2z"/></svg>
+            <span class="arch-title">归档空间</span>
+            <span class="arch-count">{{ archivedBugs.length }} 个归档任务</span>
+            <svg class="icon arch-chev" :class="{ flip: archiveExpanded }" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
+          </button>
+          <!-- 展开视图：完整行只读 + 恢复（状态下拉 disabled、无双击编辑、无删除） -->
+          <div v-if="archiveExpanded" class="archive-rows">
+            <div v-for="bug in archivedBugs" :key="bug.id" class="bug-row archive-row">
+              <div class="bug-cell bug-name">
+                <span class="name-text">{{ bug.name || '（未命名）' }}</span>
+              </div>
+              <div class="bug-cell bug-shots">
+                <div class="img-stack" v-if="(bug.images||[]).length" :style="stackWrapStyle((bug.images||[]).length)">
+                  <div
+                    v-for="(img, i) in (bug.images||[]).slice(0, 6)"
+                    :key="img"
+                    class="img-stack-card"
+                    :style="stackCardStyle(i)"
+                    @click.stop="openPreview(bug, img, $event)"
+                  ><img :src="'//' + serverHost + '/uploads/' + encodeURIComponent(img)" alt="截图" loading="lazy" decoding="async" /></div>
+                </div>
+              </div>
+              <div class="bug-cell bug-status">
+                <el-select :model-value="bug.status" disabled size="small" :class="['status-select', 'status-select-' + getStatusClass(bug.status)]"></el-select>
+              </div>
+              <div class="bug-cell bug-notes">
+                <button class="btn-note" @click.stop="openBugNotesDialog(currentTaskId, bug.id)" aria-label="查看备注" title="备注">
+                  <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.4 8.4 0 01-8.5 8.5 8.5 8.5 0 01-3.8-.9L3 21l1.9-5.7a8.5 8.5 0 01-.9-3.8 8.5 8.5 0 014.7-7.6 8.4 8.4 0 013.8-.9h.5a8.5 8.5 0 018 8z"/></svg>
+                  <span v-if="getBugNoteWriters(bug) > 0" class="notes-indicator" :class="'notes-indicator-' + Math.min(getBugNoteWriters(bug), 3)"></span>
+                </button>
+              </div>
+              <div class="bug-cell bug-actions">
+                <button class="btn-restore" @click.stop="restoreBug(bug)" title="恢复到列表（已完成组）">
+                  <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 11-2.12-9.36L23 10"/></svg>恢复
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
       </div><!-- /bug-panel -->
@@ -465,20 +574,24 @@
         :style="{ left: imageMenuX + 'px', top: imageMenuY + 'px' }"
         @click.stop
       >
-        <div class="image-menu-item btn-upload" @click="onChooseUpload">
+        <div class="image-menu-item" @click="onChooseUpload">
           <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15V3"/><path d="M7 8l5-5 5 5"/><path d="M4 17v3h16v-3"/></svg> 选择文件上传
         </div>
         <div class="image-menu-item" @click="onChoosePaste">
           <svg class="icon icon-clipboard-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="3" width="14" height="18" rx="2"/><path d="M9 3v2h6V3"/></svg> 粘贴截图
         </div>
       </div>
-      <!-- 更多菜单（导出 / 导入） -->
+      <!-- 更多菜单（设置 / 导出 / 导入） -->
       <div
         v-show="moreMenuVisible"
         class="theme-popover"
         :style="{ left: moreMenuX + 'px', top: moreMenuY + 'px' }"
         @click.stop
       >
+        <div class="theme-item" @click="openSettings()">
+          <span class="more-icon"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 00.3 1.9l.1.1a2 2 0 11-2.9 2.9l-.1-.1a1.7 1.7 0 00-1.9-.3 1.7 1.7 0 00-1 1.5V21a2 2 0 11-4 0v-.1a1.7 1.7 0 00-1-1.6 1.7 1.7 0 00-1.9.3l-.1.1a2 2 0 11-2.9-2.9l.1-.1a1.7 1.7 0 00.3-1.9 1.7 1.7 0 00-1.5-1H3a2 2 0 110-4h.1a1.7 1.7 0 001.6-1 1.7 1.7 0 00-.3-1.9l-.1-.1a2 2 0 112.9-2.9l.1.1a1.7 1.7 0 001.9.3h.1a1.7 1.7 0 001-1.5V3a2 2 0 114 0v.1a1.7 1.7 0 001 1.5 1.7 1.7 0 001.9-.3l.1-.1a2 2 0 112.9 2.9l-.1.1a1.7 1.7 0 00-.3 1.9v.1a1.7 1.7 0 001.5 1H21a2 2 0 110 4h-.1a1.7 1.7 0 00-1.5 1z"/></svg></span>
+          <span class="theme-name">设置</span>
+        </div>
         <div class="theme-item" @click="exportData">
           <span class="more-icon"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12M7 10l5 5 5-5"/><path d="M4 19h16"/></svg></span>
           <span class="theme-name">导出数据（JSON）</span>
@@ -489,6 +602,33 @@
         </div>
       </div>
       <div v-if="moreMenuVisible" class="theme-menu-backdrop" @click="closeMoreMenu"></div>
+
+      <!-- 设置面板（正中间，渐隐出入；快捷键可自定义，存本机 localStorage 不进服务器） -->
+      <div
+        v-if="settingsVisible"
+        class="settings-overlay"
+        :class="{ 'settings-closing': settingsClosing }"
+        @animationend="onSettingsAnimEnd"
+        @click.self="closeSettings()"
+      >
+        <div class="settings-dialog">
+          <div class="settings-title">设置</div>
+          <div class="settings-row">
+            <span class="settings-label">{{ isElectron ? '窗口最小化/还原的快捷键' : '打开设置的快捷键' }}</span>
+            <button class="settings-shortcut" :class="{ recording: shortcutRecording }" @click="startRecordShortcut()" title="点击后按下新的快捷键">
+              <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="18" height="12" rx="2"/><path d="M7 12h.01M11 12h.01M15 12h.01"/></svg>
+              <span class="settings-shortcut-label">{{ shortcutRecording ? '请按下新快捷键…' : shortcutLabel(shortcutDraft || shortcut) }}</span>
+            </button>
+          </div>
+          <div v-if="shortcutRecording" class="settings-hint">
+            {{ isElectron ? '全局热键（窗口最小化时也能按）：最多 3 键，Ctrl / Alt（可组合）+ 字母或数字；按 Esc 取消' : '最多 3 键：Ctrl / Alt（可组合 Ctrl+Alt）+ 字母或数字；按 Esc 取消' }}
+          </div>
+          <div class="settings-actions">
+            <button class="ns-skip" @click="closeSettings()">取消</button>
+            <button class="ns-ok" @click="confirmSettings()">确认</button>
+          </div>
+        </div>
+      </div>
       <!-- 主题选择面板（fixed 定位，移出头部避免 overflow:hidden 裁剪与毛玻璃层叠上下文） -->
       <div
         v-show="themeMenuVisible"
@@ -574,20 +714,22 @@
     <!-- 删除确认幕布（渐隐黑，浮于列表之上、行聚光之下） -->
     <div class="del-scrim" :class="{show: confirmBugId!==null}" @click="cancelDeleteConfirm()"></div>
 
-    <!-- 小火箭：右侧常驻。hover 点火预热，点击发射 + 平滑回顶 -->
-    <button class="rocket-btn" @click="launchRocket" title="回到顶部" aria-label="回到顶部">
-      <span class="rocket-body">
-        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M12 2.8c2.9 1.5 4.6 4.6 4.6 8v5.4l-1.9 1.8H9.3L7.4 16.2v-5.4c0-3.4 1.7-6.5 4.6-8z"/>
-          <circle cx="12" cy="9.2" r="1.5"/>
-          <path d="M7 12.4 4.6 11v3.6L7 15.9"/>
-          <path d="M17 12.4l2.4-1.2v3.6L17 15.9"/>
+    <!-- 小火箭：DeepSeek 式条件显隐（spec 第 2 节）——滚过 20% 且上滑才出现；hover 点火，点击发射回顶 -->
+    <transition name="rocket">
+      <button v-show="rocketVisible" class="rocket-btn" @click="launchRocket" title="回到顶部" aria-label="回到顶部">
+        <span class="rocket-body">
+          <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 2.8c2.9 1.5 4.6 4.6 4.6 8v5.4l-1.9 1.8H9.3L7.4 16.2v-5.4c0-3.4 1.7-6.5 4.6-8z"/>
+            <circle cx="12" cy="9.2" r="1.5"/>
+            <path d="M7 12.4 4.6 11v3.6L7 15.9"/>
+            <path d="M17 12.4l2.4-1.2v3.6L17 15.9"/>
+          </svg>
+        </span>
+        <svg class="rocket-flame" viewBox="0 0 24 24">
+          <path d="M12 17.5c-2.6 3-3.8 4.8-3.8 6.4a3.8 3.8 0 0 0 7.6 0c0-1.6-1.2-3.4-3.8-6.4z" fill="#FFB84D"/>
         </svg>
-      </span>
-      <svg class="rocket-flame" viewBox="0 0 24 24">
-        <path d="M12 17.5c-2.6 3-3.8 4.8-3.8 6.4a3.8 3.8 0 0 0 7.6 0c0-1.6-1.2-3.4-3.8-6.4z" fill="#FFB84D"/>
-      </svg>
-    </button>
+      </button>
+    </transition>
   </div>
 
   <!-- Vue 3 -->
