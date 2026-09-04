@@ -1,0 +1,29 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    name: 集成测试 (Node ${{ matrix.node-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: [18.x, 20.x]
+    env:
+      # 集成测试自带临时 BUGLIST_DATA_ROOT；此处再兜一层，避免任何路径写到用户目录
+      BUGLIST_DATA_ROOT: ${{ runner.temp }}/buglist-ci-data
+      # 测试跑的是纯 node 服务端 + ws 客户端，不需要 Electron 桌面二进制，跳过下载提速
+      ELECTRON_SKIP_BINARY_DOWNLOAD: 1
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+      - run: npm ci
+      - run: npm test
