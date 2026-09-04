@@ -13,8 +13,8 @@
 | 技术栈 | Node.js + ws + Vue3 + Element Plus（/vendor/ 本地化）+ Electron |
 | 怎么跑 | `npm start` → 浏览器开 `http://局域网IP:3050`（3050–3070 自动探测；`BUGLIST_PORT` 可覆盖起始端口） |
 | 数据在哪 | **`D:\Bug清单\{用户名}\data.json`**（不在项目目录！根目录 `data.json` 是旧种子文件；`BUGLIST_DATA_ROOT` 可覆盖） |
-| 桌面版 | `npm run electron` 调试；`npm run build` 打包 → `pack/任务清单.exe` |
-| 分发 | 直接把 `pack/任务清单.exe` 发给同事，双击即用（win-unpacked/ 为免安装文件夹版） |
+| 桌面版 | `npm run electron` 调试；`npm run build` 打包 → `dist/任务清单.exe` |
+| 分发 | 直接把 `dist/任务清单.exe` 发给同事，双击即用（win-unpacked/ 为免安装文件夹版） |
 
 **三条最关键的事实：**
 1. **同步模型**：任何修改 → WebSocket 广播 → 全员实时一致。三层防循环：`originClientId` 过滤 → `isLocalChange` 标记 → 新旧值比对。
@@ -47,7 +47,7 @@
 | 某功能在哪个文件哪段代码 | [目录地图](#目录地图) + [功能清单](#功能清单) |
 | 同步协议 / 消息类型 / 数据格式 | [架构与数据流](#架构与数据流) |
 | 遇到过的坑（7za / asar / ENOTDIR…） | [避坑索引](#避坑索引) |
-| 某轮需求或 Bug 修复的来龙去脉 | [知识索引 reports/](#知识索引-reports) |
+| 某轮需求或 Bug 修复的来龙去脉 | [CHANGELOG.md](CHANGELOG.md) + [产物与时间线](#产物与时间线) |
 | 历史产物 / 版本演进 | [产物与时间线](#产物与时间线) |
 
 ---
@@ -59,7 +59,7 @@ npm install          # postinstall 会自动装 7za 代理（build/setup-7za-pro
 npm start            # 纯 Web：起服务，打印局域网访问地址
 npm run dev          # node --watch 热重载
 npm run electron     # Electron 壳（内嵌服务器，托盘常驻）
-npm run build        # electron-builder 打便携 exe → pack/任务清单.exe
+npm run build        # electron-builder 打便携 exe → dist/任务清单.exe
 ```
 
 - 打包若卡在二进制下载，先设国内镜像：`ELECTRON_BUILDER_BINARIES_MIRROR="https://npmmirror.com/mirrors/electron-builder-binaries/"`（详见 `docs/archive/HANDOFF.md` 第三节）。
@@ -72,24 +72,23 @@ npm run build        # electron-builder 打便携 exe → pack/任务清单.exe
 
 | 文件 | 规模 | 职责 | 关键入口 |
 |---|---|---|---|
-| `server.js` | ~1770 行 | HTTP + WS 服务端、文件锁、持久化、图片上传 API、导出/导入、备份/快照、端口探测（`BUGLIST_PORT` 可覆盖起始端口） | `startServer()`、`handleMessage()` |
-| `public/index.html` | ~640 行 | Vue3 单页模板：启动模式对话框、项目标签栏、任务列表卡片（搜索条+筛选+排序）、新增任务"下一步"面板（deadline/备注）、备注/粘贴/预览弹窗、小火箭 | 启动对话框、任务列表卡片 |
-| `public/app.js` | ~3600 行 | Vue3 应用逻辑：WS 客户端、身份、多图、备注、备份、搜索、排序、状态动效、手动 FLIP/飞出动画、负责人 hover、deadline 面板 + 工时评估、深夜彩蛋 | `connectWebSocket()`、`handleMessage()` |
-| `public/style.css` | ~2180 行 | 手写样式（CSS 变量 + 响应式 + 动效） | — |
-| `public/themes.js` | ~510 行 | **13 套成品主题（6 浅 7 深）** + 主题 CSS 生成器（`buildThemeCss`：17 色变量 + rgb/color-mix 派生 + `deriveNotePalette` 主题和谐色板 + Element Plus 联动 + 主题专属装饰） | `BUGLIST_THEMES` / `buildThemeCss` |
+| `server.js` | ~1820 行 | HTTP + WS 服务端、文件锁、持久化、图片上传 API、导出/导入、备份/快照、端口探测（`BUGLIST_PORT` 可覆盖起始端口） | `startServer()`、`handleMessage()` |
+| `public/index.html` | ~750 行 | Vue3 单页模板：启动模式对话框、项目标签栏、任务列表卡片（搜索条+筛选+排序）、新增任务"下一步"面板（deadline/备注）、备注/粘贴/预览弹窗、小火箭 | 启动对话框、任务列表卡片 |
+| `public/app.js` | ~4000 行 | Vue3 应用逻辑：WS 客户端、身份、多图、备注、备份、搜索、排序、状态动效、手动 FLIP/飞出动画、负责人 hover、deadline 面板 + 工时评估、深夜彩蛋 | `connectWebSocket()`、`handleMessage()` |
+| `public/style.css` | ~2330 行 | 手写样式（CSS 变量 + 响应式 + 动效） | — |
+| `public/themes.js` | ~530 行 | **13 套成品主题（6 浅 7 深）** + 主题 CSS 生成器（`buildThemeCss`：17 色变量 + rgb/color-mix 派生 + `deriveNotePalette` 主题和谐色板 + Element Plus 联动 + 主题专属装饰） | `BUGLIST_THEMES` / `buildThemeCss` |
 | `public/tuner.html` | — | **主题展厅 / 在线调色台**（开发辅助，`/tuner.html`）：iframe 完整预览 13 套主题（含星云/纸纹/代码雨等专属元素）+ 17 色色板详情 + 高级微调 + 复制导出主题对象 | — |
 | `build/icon.ico` | 164KB | **应用图标 7 档**（256/128/64/48/32/24/16，用户设计图 fufu.png 转制），electron-builder 打包用 | — |
 | `public/favicon.ico` | 9.6KB | 浏览器标签页图标（48/32/16） | — |
 | `image/fufu.png` | — | 应用图标源图（用户设计，730×742，供衍生） | — |
-| `electron/main.js` | ~260 行 | 托盘（应用图标）、单实例锁、窗口管理（窗口图标）、IPC（get-local-ip / write-backup） | `app.whenReady` |
-| `electron/preload.js` | 9 行 | contextBridge 暴露 `electronAPI` | — |
-| `electron-builder.yml` | 19 行 | portable 打包配置，默认输出 `pack814/`；打 `pack/` 用 CLI 覆盖 `--config.directories.output=pack` | — |
-| `build/` | — | 7za 代理（C# 源码 + exe + postinstall 脚本）、icon.ico | 坑 1 的固化修复 |
+| `electron/main.js` | ~360 行 | 托盘（应用图标）、单实例锁、窗口管理（窗口图标）、IPC（get-local-ip / write-backup） | `app.whenReady` |
+| `electron/preload.js` | 43 行 | contextBridge 暴露 `electronAPI` | — |
+| `electron-builder.yml` | 27 行 | portable 打包配置，输出 `dist/`；未配置代码签名（自签证书无公信任锚，已移除） | — |
+| `build/` | — | 7za 代理（C# 源码 + postinstall 脚本；`7za-proxy.exe` 每次 npm install 重新编译，不入库）、icon.ico | 坑 1 的固化修复 |
 | `D:\Bug清单\{用户名}\` | — | **运行时数据目录**：`data.json` + `uploads/`（图片） | — |
-| `test-*.js` 共 5 个测试 | — | 集成测试（多图生命周期 / 备注权限 / 备注图片 / 校验防护 / 模板自闭合防线），临时数据目录隔离 | `npm test` |
+| `test-*.js` 共 6 个测试 | — | 集成测试（多图生命周期 / 备注权限 / 备注图片 / 校验防护 / 模板自闭合防线 / 归档状态机），临时数据目录隔离 | `npm test` |
 | `docs/smoke-checklist-2026-08-15.md` | — | **打包前手工验收清单**（A~L 共 12 组：布局/状态排序/负责人/deadline/深夜彩蛋/搜索/多图/删除/备注/数据安全/回顶/回归底线）；**本地文档，不入库**（见 .gitignore） | 打包前逐项打勾 |
-| `reports/` | — | 各轮开发/修复/UX 需求报告（见知识索引） | — |
-| `pack/` | — | 当前打包输出：`任务清单.exe`（便携单文件）+ `win-unpacked/`（文件夹版） | — |
+| `dist/` | — | 当前打包输出：`任务清单.exe`（便携单文件）+ `win-unpacked/`（文件夹版），`npm run build` 生成，不入库 | — |
 | `docs/` | — | 本地文档目录（验收清单/归档/规格/迭代建议）：**本地维护，不入库**（需求方约定）；README 中所有 `docs/` 引用均指本地文件 | — |
 
 ---
@@ -177,21 +176,20 @@ npm run build        # electron-builder 打便携 exe → pack/任务清单.exe
 
 ---
 
-## 📚 知识索引（reports/）
+## 📚 知识索引（本地 docs/archive/）
+
+> 以下为需求方约定「本地维护、不入库」的历史归档，仅维护者本机可见；克隆仓库的人看不到属正常，一切以本文为准。
 
 | 文档 | 内容 | 新鲜度 |
 |---|---|---|
 | `docs/archive/project-summary.md` | 旧版详细代码汇总（架构图/区块行号） | ⚠️ 已归档（7/7 旧版，功能过时，架构可参考） |
-| `reports/ux-improvement-plan.md` | UX 改进方案（5 需求 + 并行策略 + 验收） | ⚠️ 需求均已实现 |
-| `reports/req1~req5-*.md` | 地址记忆 / 单实例 / 图片上传 / 状态颜色 / 筛选排序 各轮报告 | ✅ 已实现 |
-| `reports/fix-*.md`、`agent-*-report.md`、`integration-test-report.md` | 各轮 Bug 修复与集成测试记录 | ✅ 历史记录 |
 | `docs/archive/HANDOFF.md` | 交接文档（打包命令、六大坑、产物） | ⚠️ 已归档（7/7 旧版，**打包/数据目录/功能过时**，见下） |
 | `docs/archive/plan.md` | 立项计划（架构图、任务分解、验收清单） | ⚠️ 已归档（7/2 旧版，端口 3000 系、阶段划分过时） |
 
 > 📦 **归档位置**：`docs/archive/` —— 该目录下的文档一律视为过时，仅供查历史。
 
 **HANDOFF.md 已知过时点**（原文件已归档至 `docs/archive/`）：
-1. server.js 597 行 → 现 ~1770 行；前端三件套行数全部翻倍。
+1. server.js 597 行 → 现 ~1820 行；前端三件套行数全部翻倍。
 2. 数据目录：原"exe 旁边" → 现 `D:\Bug清单\{用户名}`（`PORTABLE_EXECUTABLE_FILE` 逻辑已删除，仅剩注释）。
 3. 产品名 Bug清单 → **任务清单**；产物目录 `pack15/` 而非 `release/`。
 4. 无多项目 / 备注 / 本地备份 / 启动模式选择等新功能描述。
@@ -199,6 +197,8 @@ npm run build        # electron-builder 打便携 exe → pack/任务清单.exe
 ---
 
 ## 📦 产物与时间线
+
+> 版本级变更（含日期与要点）见仓库根 [CHANGELOG.md](CHANGELOG.md)；本表是更细粒度的开发流水账。
 
 | 日期 | 产物/事件 |
 |---|---|
@@ -218,4 +218,4 @@ npm run build        # electron-builder 打便携 exe → pack/任务清单.exe
 | 08-16 | deadline 交互迭代：「此刻」按钮改为**工时评估**（deadline 不可能=现在；弹「请评估所需工时 🌙」选 1-5 天 → 自动算当前时间+N 天填好；内置此刻按钮隐藏）；**0.2.1 定稿**（0.3 前置小点先行发布）：负责人 hover 归属 + deadline 工时评估 + 深夜彩蛋 + 主题和谐色板 |
 | 09-03 | **UX 批次（9 项，spec 第 1–9 节 + 交叉评审裁决①–⑨）**：① 吸顶区让位自绘标题栏（`--titlebar-h` 单一事实源，浏览器 0/Electron 36）+ 吸顶投影；②③ 火箭条件显隐（滚动阈值显、回顶/近底隐）+ 发射后自动收起；④ 删除项目二次确认（ElMessageBox，文案含「含已归档」）；⑤ 新建项目本地先行两步式（临时项不广播、确认才落库广播、占位「新项目」、Esc/空名丢弃，服务端兜底名同步改「新项目」）；⑥ 启动弹窗 clamp 流体适配（600×530 免滚动、卡片 wrap 替代断点竖排）；⑦ **归档体系**（已完成拒删、删除按钮换归档、面板底扑克牌堆 + 展开只读 + 原地恢复、`archived/archivedAt` 白名单 + 状态机 + `handleAdd`/导入归一化，`test-archive-guards.js` 16 项覆盖）；⑧ 贴底布局 + 页脚折叠线下；⑨ 全宽拖拽无跳变（header-right `margin-left:auto`+wrap、按钮文字 max-width 平滑收起、断点离散覆盖改 clamp）；最小窗 600×530。全 6 集成测试绿 |
 
-> 旧产物目录（dist/release/pack10-14）与 pack.zip 已于 2026-07-18 清理删除；`pack15/`、`pack814/` 为历史产物，当前输出 `pack/`。
+> 旧产物目录（dist/release/pack10-14）与 pack.zip 已于 2026-07-18 清理删除；`pack15/`、`pack814/` 为历史产物，当前输出 `dist/`。

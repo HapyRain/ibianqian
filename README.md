@@ -7,7 +7,7 @@
 **局域网即开即用、数据自持的多人协作清单工具** —— 给 5 个人的小团队，一个有性格的"手账"。
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-![Version](https://img.shields.io/badge/version-0.2.1-blue)
+![Version](https://img.shields.io/badge/version-0.3.0-blue)
 ![Node](https://img.shields.io/badge/Node.js-18%2B-green)
 ![Electron](https://img.shields.io/badge/Electron-33-blue)
 
@@ -51,7 +51,7 @@ npm install && npm start
 # 浏览器打开 http://局域网IP:3050
 ```
 
-- **Windows 便携版**：`npm run build` → `pack/任务清单.exe`，发给同事双击即用
+- **Windows 便携版**：`npm run build` → `dist/任务清单.exe`，发给同事双击即用
 - **桌面版**：`npm run electron`（托盘常驻、单实例、应用图标）
 
 ## 🧰 技术栈
