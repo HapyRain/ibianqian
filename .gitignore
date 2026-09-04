@@ -1,27 +1,32 @@
 # 依赖与构建产物（新环境 npm install / npm run build 重新生成）
 node_modules/
-pack814/
-pack*/
 dist/
 release/
+# 历史打包目录（pack814 / pack15 / packTEST 等）
+pack*/
 build-log.txt
+# 7za 代理每次 npm install 由 postinstall 重新编译，不入库
+build/7za-proxy.exe
+
+# 代码签名证书（私钥材料，绝不入库；如需签名用 CSC_LINK / CSC_KEY_PASSWORD 环境变量）
+*.pfx
+
+# 本地运行时数据（真实数据在 D:\Bug清单\{用户名}\；根目录 data.json 为遗留种子，不入库）
+/data.json
+data.json.corrupted.*
+data.json.backup-*
 
 # 临时与运行时产物
 tmp/
 uploads/
 *.log
-data.json.corrupted.*
-data.json.backup-*
 
-# 本地开发辅助配置（不入库）
-.dsh/
-
-# 文档（本地维护，不入库——需求方约定，验收清单/迭代建议等在本地查看）
+# 本地文档（验收清单 / 规格 / 归档 / 迭代建议——需求方约定不入库，见 DEVELOPMENT.md 顶部说明）
 docs/
 
-# 视觉伴侣与设计过程文件（可选保留，按需取消注释）
-.superpowers/
+# Agent / 工具本地配置与缓存（各工具自管，不入库）
 .claude/
+.superpowers/
 .mimocode/
 
 # 系统文件

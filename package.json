@@ -1,8 +1,10 @@
 {
   "name": "ibianqian-buglist",
   "version": "0.3.0",
-  "description": "多人协同 Bug 清单工具",
+  "private": true,
+  "description": "局域网多人协同清单工具",
   "author": "HapyRain",
+  "license": "MIT",
   "main": "electron/main.js",
   "scripts": {
     "start": "node server.js",
@@ -20,5 +22,16 @@
   "devDependencies": {
     "electron": "^33.0.0",
     "electron-builder": "^25.0.0"
-  }
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/HapyRain/ibianqian.git"
+  },
+  "bugs": {
+    "url": "https://github.com/HapyRain/ibianqian/issues"
+  },
+  "homepage": "https://github.com/HapyRain/ibianqian#readme"
 }

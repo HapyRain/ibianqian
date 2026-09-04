@@ -1,0 +1,19 @@
+root = true
+
+# 统一：LF 换行、UTF-8、文件末尾换行、去行尾空格（对应 .gitattributes 的 eol=lf）
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 2
+
+# Markdown 中行尾双空格是硬换行语义，不能裁剪；正文/中文文档不设固定行宽
+[*.md]
+trim_trailing_whitespace = false
+max_line_length = off
+
+[*.{png,ico,exe,pfx}]
+insert_final_newline = unset
+trim_trailing_whitespace = unset
