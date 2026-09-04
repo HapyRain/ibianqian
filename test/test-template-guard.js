@@ -7,7 +7,7 @@
 const fs = require('fs');
 const path = require('path');
 
-const html = fs.readFileSync(path.join(__dirname, 'public', 'index.html'), 'utf8');
+const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'index.html'), 'utf8');
 const re = /<(el-[a-z-]+)\b[^>]*\/\s*>/g;
 let m, failed = 0;
 while ((m = re.exec(html)) !== null) {

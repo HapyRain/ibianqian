@@ -2,7 +2,7 @@
 
 <div align="center">
 
-<img src="image/fufu.png" alt="任务清单" width="110" />
+<img src="build/icon-src.png" alt="任务清单" width="110" />
 
 **局域网即开即用、数据自持的多人协作清单工具** —— 给 5 个人的小团队，一个有性格的"手账"。
 
@@ -32,15 +32,15 @@
 
 ## 🖼 长这样
 
-<img src="image/home.png" alt="任务清单主界面（暖纸面主题）" width="720" />
+<img src="assets/screenshots/home.png" alt="任务清单主界面（暖纸面主题）" width="720" />
 
 主界面 · 暖纸面（默认主题）——项目标签 / 任务列表 / 状态 / 图片牌堆
 
-<img src="image/home-delete.png" alt="删除任务交互" width="720" />
+<img src="assets/screenshots/home-delete.png" alt="删除任务交互" width="720" />
 
 删除任务：长按蓄怒 → 确认气泡 + 行聚光 + 渐隐幕布
 
-<img src="image/notes.png" alt="备注弹窗" width="720" />
+<img src="assets/screenshots/notes.png" alt="备注弹窗" width="720" />
 
 双层备注：作者色点 + 只读默认 + 修改/删除
 

@@ -78,15 +78,15 @@ npm run build        # electron-builder 打便携 exe → dist/任务清单.exe
 | `public/style.css` | ~2330 行 | 手写样式（CSS 变量 + 响应式 + 动效） | — |
 | `public/themes.js` | ~530 行 | **13 套成品主题（6 浅 7 深）** + 主题 CSS 生成器（`buildThemeCss`：17 色变量 + rgb/color-mix 派生 + `deriveNotePalette` 主题和谐色板 + Element Plus 联动 + 主题专属装饰） | `BUGLIST_THEMES` / `buildThemeCss` |
 | `public/tuner.html` | — | **主题展厅 / 在线调色台**（开发辅助，`/tuner.html`）：iframe 完整预览 13 套主题（含星云/纸纹/代码雨等专属元素）+ 17 色色板详情 + 高级微调 + 复制导出主题对象 | — |
-| `build/icon.ico` | 164KB | **应用图标 7 档**（256/128/64/48/32/24/16，用户设计图 fufu.png 转制），electron-builder 打包用 | — |
+| `build/icon.ico` | 164KB | **应用图标 7 档**（256/128/64/48/32/24/16，用户设计图 `build/icon-src.png` 转制），electron-builder 打包用 | — |
 | `public/favicon.ico` | 9.6KB | 浏览器标签页图标（48/32/16） | — |
-| `image/fufu.png` | — | 应用图标源图（用户设计，730×742，供衍生） | — |
+| `build/icon-src.png` | — | 应用图标源图（用户设计，730×742，供衍生） | — |
 | `electron/main.js` | ~360 行 | 托盘（应用图标）、单实例锁、窗口管理（窗口图标）、IPC（get-local-ip / write-backup） | `app.whenReady` |
 | `electron/preload.js` | 43 行 | contextBridge 暴露 `electronAPI` | — |
 | `electron-builder.yml` | 27 行 | portable 打包配置，输出 `dist/`；未配置代码签名（自签证书无公信任锚，已移除） | — |
 | `build/` | — | 7za 代理（C# 源码 + postinstall 脚本；`7za-proxy.exe` 每次 npm install 重新编译，不入库）、icon.ico | 坑 1 的固化修复 |
 | `D:\Bug清单\{用户名}\` | — | **运行时数据目录**：`data.json` + `uploads/`（图片） | — |
-| `test-*.js` 共 6 个测试 | — | 集成测试（多图生命周期 / 备注权限 / 备注图片 / 校验防护 / 模板自闭合防线 / 归档状态机），临时数据目录隔离 | `npm test` |
+| `test/test-*.js` 共 6 个测试 | — | 集成测试（多图生命周期 / 备注权限 / 备注图片 / 校验防护 / 模板自闭合防线 / 归档状态机），临时数据目录隔离 | `npm test` |
 | `docs/smoke-checklist-2026-08-15.md` | — | **打包前手工验收清单**（A~L 共 12 组：布局/状态排序/负责人/deadline/深夜彩蛋/搜索/多图/删除/备注/数据安全/回顶/回归底线）；**本地文档，不入库**（见 .gitignore） | 打包前逐项打勾 |
 | `dist/` | — | 当前打包输出：`任务清单.exe`（便携单文件）+ `win-unpacked/`（文件夹版），`npm run build` 生成，不入库 | — |
 | `docs/` | — | 本地文档目录（验收清单/归档/规格/迭代建议）：**本地维护，不入库**（需求方约定）；README 中所有 `docs/` 引用均指本地文件 | — |
@@ -110,7 +110,7 @@ npm run build        # electron-builder 打便携 exe → dist/任务清单.exe
 | 用户身份 | 稳定 clientId（Electron 用 MAC 哈希、浏览器持久化 uuid）+ 显示名，备注显示作者名 | app.js 身份模块；electron `get-mac-id` |
 | 负责人（assignee） | **新增任务自动归属**：谁新建的就是谁的（`{ clientId, name }` 随任务数据同步广播）；**hover 浮出**——平时行上零显示（不"公示"，小团队收敛），悬停行时名称上方淡入小标签（边框/淡底 = 当前主题派生和谐色板 `deriveNotePalette(primary)`，随主题联动、颜色即人，与备注作者色点同源）；名字未填时显示「我」/ clientId 前 8 位（兜底同备注）；**只读不可改**（转交留待后续）；存量任务无 assignee 不显示；导入/导出 JSON 归一化保留 | app.js `addBug` / `assigneeLabel` / `getNoteColor`；themes.js `deriveNotePalette`；server.js `handleAdd` / `normalizeBugForImport` |
 | 主题切换 | **13 套成品主题（6 浅 7 深）点选即换肤**：暖纸面（默认）/冷灰纸面/豆沙绿/晨雾淡紫/羊皮纸/樱粉晨雾 + One Dark/GitHub Dark/暖棕夜灯/星空蓝/蔷薇暮色/赛博朋克/黑客帝国；**全元素联动**（按钮/状态胶囊/删除蓄怒动画/Element Plus 组件随主题换色，无割裂）；主题带专属质感（星空蓝星云+流星、羊皮纸/冷灰纸面/豆沙绿纸纹、赛博朋克网格+霓虹、黑客帝国代码雨）；**切换带暗色幕布过渡**（纯暗色幕布淡入 → 换肤 → 淡出，全程 ≈1s 有始有终）；**菜单文字统一颜色**（主题名留白，点进去才揭晓配色，保留探知欲）；选择存本机 localStorage（`buglist_theme`），不参与服务端同步 | themes.js（`BUGLIST_THEMES` + `buildThemeCss`） |
-| 应用图标 | 用户设计图（`image/fufu.png`，730×742）本地转多尺寸：`build/icon.ico` 7 档（256/128/64/48/32/24/16，electron-builder 打包用）+ `public/favicon.ico` 3 档（浏览器标签页）；**Electron 托盘与窗口图标也使用 favicon.ico**（原托盘为内存生成色块）；非方形已适配为正方形（LANCZOS） | `build/icon.ico`、`public/favicon.ico`、`electron/main.js` |
+| 应用图标 | 用户设计图（`build/icon-src.png`，730×742）本地转多尺寸：`build/icon.ico` 7 档（256/128/64/48/32/24/16，electron-builder 打包用）+ `public/favicon.ico` 3 档（浏览器标签页）；**Electron 托盘与窗口图标也使用 favicon.ico**（原托盘为内存生成色块）；非方形已适配为正方形（LANCZOS） | `build/icon.ico`、`public/favicon.ico`、`electron/main.js` |
 | 服务端数据备份 | 每次写盘节流轮转备份到 `backups/data-*.json`（保留 20 份）；删除类操作前自动快照 `pre-delete-*.json`（保留 5 份） | server.js `backupDataFile` / `snapshotBeforeDelete` |
 | 导出 / 导入 | 头部 ⋮ 菜单：导出 JSON 备份（浏览器下载）；导入 JSON 覆盖（服务端写盘 + 全量广播），引用缺失的图片会提示 | server.js `handleExportData` / `handleImportData`；app.js `exportData` / `onImportFileSelect` |
 | 离线补发 | 断线期间的操作暂存本地队列（上限 50 条），重连后先补发再全量同步 | app.js `pendingQueue` |

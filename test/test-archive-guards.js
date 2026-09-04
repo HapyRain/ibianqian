@@ -17,11 +17,11 @@ const http = require('http');
 const os = require('os');
 const path = require('path');
 
-// ⚠️ 必须在 require('./server') 之前设置数据目录（server.js 在 require 时计算 DATA_ROOT）
+// ⚠️ 必须在 require('../server') 之前设置数据目录（server.js 在 require 时计算 DATA_ROOT）
 const DATA_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'buglist-archive-'));
 process.env.BUGLIST_DATA_ROOT = DATA_ROOT;
 
-const { startServer } = require('./server');
+const { startServer } = require('../server');
 const WebSocket = require('ws');
 
 const DATA_FILE = path.join(DATA_ROOT, 'data.json');

@@ -14,7 +14,7 @@ npm run dev                # node --watch 热重载
 npm run electron           # Electron 壳调试（内嵌同一个 server.js，托盘常驻）
 npm run build              # electron-builder 打便携 exe → dist/任务清单.exe
 npm test                   # 依次跑 6 个集成测试
-node test-validation-guards.js   # 跑单个测试（test-*.js 都是独立 node 脚本）
+node test/test-validation-guards.js   # 跑单个测试（test/test-*.js 都是独立 node 脚本）
 ```
 
 没有 lint / formatter / 单元测试框架；测试是手写集成脚本（起真实 server + ws 客户端断言）。打包卡二进制下载时设 `ELECTRON_BUILDER_BINARIES_MIRROR="https://npmmirror.com/mirrors/electron-builder-binaries/"`。

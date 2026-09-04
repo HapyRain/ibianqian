@@ -19,12 +19,12 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-// ⚠️ 必须在 require('./server') 之前设置数据目录（server.js 在 require 时计算 DATA_ROOT）
+// ⚠️ 必须在 require('../server') 之前设置数据目录（server.js 在 require 时计算 DATA_ROOT）
 const DATA_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'buglist-image-'));
 process.env.BUGLIST_DATA_ROOT = DATA_ROOT;
 const UPLOADS_DIR = path.join(DATA_ROOT, 'uploads');
 
-const { startServer } = require('./server');
+const { startServer } = require('../server');
 const WebSocket = require('ws');
 
 let passed = 0;

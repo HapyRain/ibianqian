@@ -11,7 +11,7 @@
     "dev": "node --watch server.js",
     "electron": "electron .",
     "build": "electron-builder --win portable --config electron-builder.yml",
-    "test": "node test-validation-guards.js && node test-image-lifecycle.js && node test-note-image.js && node test-note-ownership.js && node test-template-guard.js && node test-archive-guards.js",
+    "test": "node test/test-validation-guards.js && node test/test-image-lifecycle.js && node test/test-note-image.js && node test/test-note-ownership.js && node test/test-template-guard.js && node test/test-archive-guards.js",
     "postinstall": "node build/setup-7za-proxy.js"
   },
   "dependencies": {
