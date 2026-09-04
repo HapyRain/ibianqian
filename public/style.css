@@ -61,7 +61,12 @@
   --radius-pill: 20px;
   --transition: 0.25s cubic-bezier(0.22, 1, 0.36, 1);
   --transition-fast: 0.15s cubic-bezier(0.22, 1, 0.36, 1);
+
+  /* 自绘标题栏高度（唯一事实源，spec 第 10 节裁决③）：浏览器 0，Electron 36px。
+     Electron 分支由 .win-titlebar ~ .app-container 覆写（标题栏仅 Electron 渲染） */
+  --titlebar-h: 0px;
 }
+.win-titlebar ~ .app-container { --titlebar-h: 36px; }
 
 /* ============================================================
    Element Plus 浅色变量（回归默认浅色系）
@@ -170,7 +175,12 @@ body {
 .app-container {
   max-width: 960px;
   margin: 0 auto;
-  padding: 24px 20px 40px;
+  display: flex;
+  flex-direction: column;
+  /* 贴底布局（spec 第 8 节）：内容不足一屏时容器撑满视口（扣标题栏，变量见裁决③），
+     面板 flex:1 顶住窗口底缘，页脚被挤到折叠线下 */
+  min-height: calc(100vh - var(--titlebar-h, 0px));
+  padding: clamp(12px, 1rem + 0.8vw, 24px) clamp(10px, 1.5vw, 20px) 0; /* 底部归零：面板真正贴底；左右/上随视口连续缩放（spec 第 6 节） */
 }
 
 /* ============================================================
@@ -183,7 +193,7 @@ body {
   flex-wrap: wrap;
   gap: 12px;
   margin-bottom: 20px;
-  padding: 16px 24px;
+  padding: 16px clamp(12px, 3vw, 24px);
   background: var(--surface-hi);
   border: 1px solid var(--line-soft);
   border-radius: var(--radius-lg);
@@ -204,7 +214,7 @@ body {
 }
 
 .app-title {
-  font-size: 1.35rem;
+  font-size: clamp(1rem, 1.04rem + 0.36vw, 1.35rem);
   font-weight: 700;
   color: var(--text);
   display: flex;
@@ -224,7 +234,10 @@ body {
 .header-right {
   display: flex;
   align-items: center;
-  gap: 16px;
+  gap: clamp(10px, 2vw, 16px);
+  row-gap: 8px;
+  flex-wrap: wrap;      /* 极窄时内部折行，仍保持靠右（spec 第 6 节） */
+  margin-left: auto;    /* 单行贴右；随 .app-header wrap 折到第二行后仍贴右 */
   position: relative;
   z-index: 1;
 }
@@ -383,8 +396,8 @@ body {
   padding: 6px 14px;
   font-size: 0.84rem;
   color: var(--text-2);
-  background: transparent;
-  border: 1px solid transparent;
+  background: rgba(var(--text-rgb), 0.045);
+  border: 1px solid rgba(var(--text-rgb), 0.09);
   border-radius: var(--radius-pill);
   cursor: pointer;
   white-space: nowrap;
@@ -394,10 +407,16 @@ body {
   font-weight: 500;
 }
 
+/* 空闲态弱化附属图标，缓解"漂浮文字"的凌乱；hover 恢复满显（选中态不弱化） */
+.task-tab:not(.task-tab-active) .task-notes-btn{opacity:.62}
+.task-tab:not(.task-tab-active) .task-tab-close{opacity:.42}
+.task-tab:not(.task-tab-active):hover .task-notes-btn,
+.task-tab:not(.task-tab-active):hover .task-tab-close{opacity:1}
+
 .task-tab:hover {
   color: var(--text);
-  background: rgba(0, 0, 0, 0.04);
-  border-color: rgba(0, 0, 0, 0.06);
+  background: rgba(var(--text-rgb), 0.10);
+  border-color: rgba(var(--text-rgb), 0.14);
 }
 
 .task-tab-active {
@@ -467,8 +486,14 @@ body {
 .task-tab.drop-after::after{right:-4px}
 
 /* 新增项目按钮（标签栏右侧，实心主色凸显；与"新增任务"同尺寸同族） */
-.btn-add-project { border-radius: 9px; flex-shrink: 0; }
-.btn-add-project .icon { width: 15px; height: 15px; margin-right: 5px; }
+.btn-add-project { border-radius: 9px; flex-shrink: 0; transition: padding .25s cubic-bezier(.3,.9,.35,1); }
+.btn-add-project .icon { width: 15px; height: 15px; margin-right: 5px; transition: margin-right .25s cubic-bezier(.3,.9,.35,1); }
+.btn-add-project .btn-label,
+.btn-add-task .btn-label {
+  display: inline-block; max-width: 120px; opacity: 1; overflow: hidden;
+  white-space: nowrap; vertical-align: middle;
+  transition: max-width .25s cubic-bezier(.3,.9,.35,1), opacity .2s cubic-bezier(.3,.9,.35,1); /* 裁决⑧反馈族：文字平滑收拢/展开 */
+}
 
 /* ============================================================
    备注按钮 + 指示器
@@ -556,6 +581,8 @@ body {
   border: 1px solid var(--line-soft);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-card);
+  flex: 1; /* 地板：内容不足时伸到窗口底，空白留在面板内部（spec 第 8 节） */
+  display: flex; flex-direction: column; /* 让 .bug-list 成为可伸展的 flex 子项，把纵向富余空间交给它（归档区沉底的前置，spec 第 7 节） */
 }
 /* 项目切换：面板方向感知滑入（新项目在右侧→从右滑入，在左侧→从左滑入；一次性动画播完静止） */
 .bug-panel.swipe-right{animation:panelSwipeRight .3s cubic-bezier(.3,1,.4,1)}
@@ -595,7 +622,7 @@ body {
 .filter-buttons {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: clamp(6px, 0.85vw, 8px);
   align-items: center;
 }
 
@@ -603,7 +630,7 @@ body {
 .filter-buttons {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: clamp(6px, 0.85vw, 8px);
   align-items: center;
 }
 
@@ -709,7 +736,7 @@ body {
    状态下拉选择器
    ============================================================ */
 .status-select {
-  width: 120px;
+  width: clamp(92px, calc(8vw + 40px), 120px);
 }
 
 .status-select .el-select__wrapper {
@@ -1049,6 +1076,26 @@ body {
 }
 
 /* ============================================================
+   消息确认框（ElMessageBox）——对齐玻璃对话框语言：大圆角 + 卡片阴影 + 细描边 + 统一内距 + 按钮 hover 收敛
+   ============================================================ */
+.el-message-box{border-radius:var(--radius-lg) !important;box-shadow:var(--shadow-dialog) !important;border:1px solid var(--line) !important;padding:22px 22px 18px !important;overflow:hidden}
+.el-message-box__header{padding:0 4px 6px !important}
+.el-message-box__title{font-size:1.06rem !important;font-weight:700 !important;letter-spacing:-.01em;color:var(--text) !important}
+.el-message-box__content{padding:8px 4px 6px !important}
+.el-message-box__message{font-size:.9rem !important;line-height:1.65;color:var(--text-2) !important}
+.el-message-box__message p{color:var(--text-2) !important}
+.el-message-box__btns{padding:16px 0 0 !important;display:flex;justify-content:flex-end;gap:10px}
+/* 取消：EP 该版默认给取消键 type=primary（实心主题蓝）→ 结构式选非危险键强制改「透明幽灵」：背景透明 + 清晰可读文字，弱化为次要操作 */
+.el-message-box__btns .el-button:not(.el-button--danger){background:transparent !important;border:1px solid rgba(var(--text-rgb),.2) !important;color:var(--text) !important;box-shadow:none !important;font-weight:500}
+.el-message-box__btns .el-button:not(.el-button--danger) span{color:var(--text) !important}
+.el-message-box__btns .el-button:not(.el-button--danger):hover{background:rgba(var(--text-rgb),.07) !important;border-color:rgba(var(--text-rgb),.32) !important;color:var(--text) !important;transform:none}
+.el-message-box__btns .el-button:not(.el-button--danger):active{background:rgba(var(--text-rgb),.12) !important}
+/* 删除：柔和危险态；hover 加深红底 + 微上浮与投影（描边/环用 danger-rgb 派生），语义清晰且不发脏 */
+.el-message-box .el-button--danger{background:var(--danger-soft) !important;border:1px solid rgba(var(--danger-rgb),.5) !important;color:var(--danger) !important;font-weight:600;box-shadow:none !important;transition:transform .16s ease,box-shadow .16s ease,background .16s ease,border-color .16s ease}
+.el-message-box .el-button--danger:hover{background:color-mix(in srgb,var(--danger) 16%,var(--surface-hi)) !important;border-color:rgba(var(--danger-rgb),.72) !important;color:var(--danger) !important;transform:translateY(-1px);box-shadow:0 3px 11px rgba(var(--danger-rgb),.24),inset 0 1px 0 rgba(255,255,255,.14) !important}
+.el-message-box .el-button--danger:active{transform:translateY(0) scale(.98);box-shadow:inset 0 1px 3px rgba(var(--danger-rgb),.18) !important}
+
+/* ============================================================
    SVG 图标系统
    ============================================================ */
 .icon {
@@ -1160,15 +1207,19 @@ body {
   -webkit-backdrop-filter: blur(28px) saturate(1.8);
   border: 1px solid rgba(0, 0, 0, 0.06);
   border-radius: var(--radius-lg);
-  padding: 44px 48px;
+  padding: clamp(18px, 5vh, 44px) clamp(20px, 4vw, 48px); /* 流体：随视口连续缩放，600×530 刚好放下（spec 第 5 节） */
   max-width: 520px;
   width: 90%;
-  max-height: calc(100vh - 32px); /* 小窗体自适应：超高时对话框内部滚动，不再溢出看不见 */
+  max-height: calc(100vh - 32px); /* 小窗体兜底：仍超高时对话框内部滚动 */
   overflow-y: auto;
+  scrollbar-width: thin; /* 兜底滚动条常显可发现 */
+  scrollbar-color: rgba(var(--text-rgb), .25) transparent;
   box-shadow: var(--shadow-dialog);
   text-align: center;
   position: relative;
 }
+.startup-dialog::-webkit-scrollbar { width: 6px; }
+.startup-dialog::-webkit-scrollbar-thumb { background: rgba(var(--text-rgb), .2); border-radius: 3px; }
 
 .startup-dialog::before {
   content: '';
@@ -1199,26 +1250,27 @@ body {
 .startup-subtitle {
   font-size: 0.9rem;
   color: var(--text-2);
-  margin: 0 0 28px;
+  margin: 0 0 clamp(12px, 3.5vh, 28px);
   position: relative;
   z-index: 1;
 }
 
 .startup-mode-buttons {
   display: flex;
-  gap: 14px;
-  margin-bottom: 24px;
+  flex-wrap: wrap; /* 卡片放不下自然换行堆叠，替代 ≤768 的 column 硬切（spec 第 5 节） */
+  gap: clamp(8px, 2vh, 14px);
+  margin-bottom: clamp(12px, 3vh, 24px);
   position: relative;
   z-index: 1;
 }
 
 .startup-btn {
-  flex: 1;
+  flex: 1 1 200px; /* 与 wrap 配合：宽窗口并排，窄窗口自然堆叠，无断点跳变 */
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 8px;
-  padding: 28px 16px;
+  gap: clamp(5px, 1.5vh, 8px);
+  padding: clamp(12px, 4.5vh, 28px) 16px;
   border: 1px solid rgba(0, 0, 0, 0.08);
   border-radius: var(--radius);
   background: rgba(0, 0, 0, 0.02);
@@ -1529,7 +1581,7 @@ body {
   align-items: center;
   gap: 8px;
   margin-top: 20px;
-  padding: 10px 0;
+  padding: 10px 0 16px; /* 露出后底部有呼吸感（spec 第 8 节，折叠线下方） */
   font-size: 0.73rem;
   color: var(--text-2);
   user-select: none;
@@ -1669,68 +1721,26 @@ body {
    响应式
    ============================================================ */
 @media (max-width: 768px) {
-  .app-container {
-    padding: 12px 10px 24px;
-  }
-
-  .app-header {
-    flex-direction: column;
-    align-items: flex-start;
-    padding: 16px 18px;
-  }
-
-  .app-title {
-    font-size: 1.2rem;
-  }
-
-  .header-right {
-    width: 100%;
-    justify-content: space-between;
-  }
-
-  .filter-buttons {
-    gap: 6px;
-  }
-
-  /* 窄窗：新增项目 / 新增任务 同时收成纯图标按钮 */
+  /* 窄窗：新增项目 / 新增任务 文字平滑收起（max-width+opacity 过渡，spec 第 6 节），按钮收成纯图标 */
   .btn-add-project .btn-label,
-  .btn-add-task .btn-label { display: none; }
+  .btn-add-task .btn-label { max-width: 0; opacity: 0; }
   .btn-add-project,
   .btn-add-task { padding: 8px !important; }
   .btn-add-project .icon,
   .btn-add-task .icon { margin-right: 0; }
 
-  .status-select {
-    width: 92px;
-  }
-
-  /* 窄窗：收窄行内列，避免操作列被挤出（Electron 最小窗 600px）
-     前缀 .bug-list 提升特异性至 (0,2,0)，压过文件后部基础规则 (0,1,0)，不依赖源顺序 */
-  .bug-list .bug-row { gap: 8px; }
+  /* bug-name 是最小可收缩列：窄窗下仍须 min-width:0 让操作列不被挤出；
+     其余（padding/gap/状态列宽/标题字号）已交由基础规则 clamp 连续缩放，不再有断点跳变 */
   .bug-list .bug-name { min-width: 0; }
-  .bug-list .bug-status { width: 92px; }
 
   .client-count {
     display: none;
-  }
-
-  .startup-dialog {
-    padding: 32px 24px;
-  }
-
-  .startup-mode-buttons {
-    flex-direction: column;
-    gap: 10px;
   }
 }
 
 @media (max-width: 480px) {
   body {
     font-size: 14px;
-  }
-
-  .app-title {
-    font-size: 1rem;
   }
 }
 
@@ -1797,27 +1807,52 @@ body {
 /* ============================================================
    任务列表（自定义行，替代 el-table）
    ============================================================ */
-.bug-list{min-height:0;padding:12px 16px 16px}
+.bug-list{min-height:0;padding:12px 16px 16px;display:flex;flex-direction:column;flex:1 0 auto} /* flex:1 0 auto：短内容时伸满面板底（归档区得以沉底）；长内容时绝不收缩，行数撑高页面正常滚动（spec 第 7 节，配合 .archive-zone margin-top:auto） */
 /* 吸顶区（搜索 + 筛选/新增）：页面滚动时固定在视口顶部（顶栏/项目栏随页面滚走）；
    背景不透明盖住下方列表即可，常态不加阴影 */
 .panel-sticky{
-  position:sticky;top:0;z-index:120;
+  position:sticky;top:var(--titlebar-h);z-index:120;
   background:var(--surface);
   border-radius:var(--radius-lg) var(--radius-lg) 0 0;
+  transition:box-shadow .2s cubic-bezier(.3,.9,.35,1);
+  flex:0 0 auto; /* 作为 .bug-panel 的 flex 子项保持自然高度，纵向富余全交给 .bug-list（spec 第 7 节） */
 }
+/* 吸顶状态（JS 挂 .is-stuck）：投影与下方滚动的行分层（spec 第 1 节） */
+.panel-sticky.is-stuck{ box-shadow:0 8px 20px rgba(var(--text-rgb),.10); }
 /* 行列表（TransitionGroup 渲染容器）：flex 列布局；移动/飞出动画由 JS 手动驱动（内联样式） */
 .bug-rows{display:flex;flex-direction:column;gap:7px;position:relative}
+/* ============================================================
+   归档区（spec 第 7 节、裁决②）：沉面板底（margin-top:auto）；合并式可折叠页头（无大卡片/无已完成） + 只读行
+   ============================================================ */
+.archive-zone{margin-top:auto;padding-top:12px;display:flex;flex-direction:column;gap:6px}
+.archive-header{display:flex;align-items:center;gap:8px;width:100%;padding:10px;border:none;background:transparent;color:var(--text-2);font-size:12.5px;cursor:pointer;border-radius:10px;transition:background .18s ease,color .18s ease}
+.archive-header:hover{background:var(--surface-hi);color:var(--text)}
+.arch-box{width:15px;height:15px;flex:none;color:var(--primary)}
+.arch-title{font-weight:600;white-space:nowrap}
+.arch-count{flex:none;margin-left:auto;font-size:11px;color:var(--text-2);opacity:.72}
+.arch-chev{width:14px;height:14px;flex:none;transition:transform .25s cubic-bezier(.3,.9,.35,1)}
+.arch-chev.flip{transform:rotate(180deg)}
+.archive-header.archive-flash .arch-count{animation:countFlash .7s ease} /* 复用既有 @keyframes countFlash，入堆时闪烁计数 */
+.archive-rows{display:flex;flex-direction:column;gap:7px}
+.archive-row{opacity:.88}
+.archive-row .bug-name{cursor:default}
+.btn-archive{display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;padding:0;border:1px solid var(--line);background:var(--surface-hi);color:var(--text-2);border-radius:9px;font-size:0;cursor:pointer;position:relative;transition:transform .24s cubic-bezier(.3,1.4,.5,1), box-shadow .24s ease, background .18s ease, border-color .18s ease, color .18s ease}
+.btn-archive:hover{transform:translateY(-1px);box-shadow:0 3px 10px rgba(var(--primary-rgb),.2);border-color:var(--primary);color:var(--primary)}
+.btn-archive:active{transition-duration:.09s;transform:scale(.97)}
+.btn-archive .icon{width:14px;height:14px}
+.btn-restore{flex:none;display:inline-flex;align-items:center;gap:4px;border:1px solid var(--line);background:var(--surface-hi);color:var(--text-2);font-size:12px;padding:6px 10px;border-radius:8px;cursor:pointer;transition:border-color .18s ease,color .18s ease}
+.btn-restore:hover{border-color:var(--primary);color:var(--primary)}
+.btn-restore .icon{width:12px;height:12px}
 /* 计数徽标闪烁（状态移动完成后的反馈涟漪） */
 .filter-flash{animation:countFlash .7s ease}
 @keyframes countFlash{0%{box-shadow:0 0 0 0 rgba(var(--primary-rgb),.5)}70%{box-shadow:0 0 0 9px rgba(var(--primary-rgb),0)}100%{box-shadow:0 0 0 0 rgba(var(--primary-rgb),0)}}
-.bug-row{position:relative;display:flex;align-items:center;gap:10px;background:var(--surface);border:1px solid var(--line-soft);border-radius:11px;padding:9px 12px;min-height:44px;box-shadow:var(--shadow-card);transition:height .32s cubic-bezier(.3,.9,.35,1), opacity .2s ease, box-shadow .2s ease}
+.bug-row{position:relative;display:flex;align-items:center;gap:clamp(8px,1vw,10px);background:var(--surface);border:1px solid var(--line-soft);border-radius:11px;padding:9px 12px;min-height:44px;box-shadow:var(--shadow-card);transition:height .32s cubic-bezier(.3,.9,.35,1), opacity .2s ease, box-shadow .2s ease}
 .bug-row:hover{background:var(--surface-hi);box-shadow:var(--shadow-hover)}
-.bug-status{width:120px;flex:none}
+.bug-status{width:clamp(92px,calc(8vw + 45px),130px);flex:none}
 .bug-shots{flex:none;display:flex;align-items:center;gap:6px;position:relative}
 .bug-shots.drag-over{outline:2px dashed var(--primary);outline-offset:-2px;border-radius:8px}
 .bug-notes{flex:none}
 .bug-actions{flex:none;display:flex;justify-content:flex-end;position:relative}
-.bug-list-wide .bug-status{width:130px}
 .img-stack{position:relative;height:66px}
 .img-stack-card{position:absolute;top:2px;left:0;width:52px;height:62px;border-radius:8px;overflow:hidden;border:1px solid rgba(var(--text-rgb),.18);box-shadow:0 2px 6px rgba(var(--text-rgb),.16);background:var(--surface-hi);transition:transform .26s cubic-bezier(.3,1.7,.45,1), box-shadow .2s ease;cursor:pointer}
 .img-stack-card img{width:100%;height:100%;object-fit:cover;display:block}
@@ -2040,10 +2075,10 @@ body {
   --el-button-active-bg-color: var(--primary-deep);
   --el-button-active-border-color: var(--primary-deep);
   --el-button-active-text-color: var(--text-inverse);
-  transition: transform .24s cubic-bezier(.3,1.4,.5,1), box-shadow .22s ease, background-color .2s ease, border-color .2s ease, color .2s ease;
+  transition: transform .24s cubic-bezier(.3,1.4,.5,1), box-shadow .22s ease, background-color .2s ease, border-color .2s ease, color .2s ease, padding .25s cubic-bezier(.3,.9,.35,1);
 }
 .btn-add-task:hover { transform: translateY(-1px); box-shadow: 0 4px 12px rgba(var(--primary-rgb),.3); }
-.btn-add-task .icon { width: 15px; height: 15px; margin-right: 5px; transition: transform .22s cubic-bezier(.3,1.4,.5,1); }
+.btn-add-task .icon { width: 15px; height: 15px; margin-right: 5px; transition: transform .22s cubic-bezier(.3,1.4,.5,1), margin-right .25s cubic-bezier(.3,.9,.35,1); }
 .btn-add-task:active .icon { transform: rotate(90deg); }
 .btn-add-task.land { animation: addLand .34s cubic-bezier(.3,1.3,.5,1); }
 @keyframes addLand{0%{transform:translateY(2px)}45%{transform:translateY(-1.5px)}100%{transform:translateY(0)}}
@@ -2156,7 +2191,7 @@ body {
    ============================================================ */
 .win-titlebar{
   position:sticky;top:0;z-index:3000;
-  display:flex;align-items:center;height:36px;flex:none;
+  display:flex;align-items:center;height:36px;flex:none; /* ⬅ 36px 是标题栏高度唯一事实源：CSS 靠 --titlebar-h(见 :root 段) 让位吸顶，JS onWinScroll 于 onMounted 量本元素 offsetHeight 判定吸顶阈值——改此处即三处同步生效 */
   background:var(--surface-hi);
   border-bottom:1px solid var(--line-soft);
   user-select:none;-webkit-user-select:none;
@@ -2178,7 +2213,11 @@ body {
 .win-btn:hover{background:rgba(var(--text-rgb),.09);color:var(--text)}
 .win-btn-close:hover{background:var(--danger);color:#fff}
 .win-btn.on{color:var(--primary)}
-.win-btn svg{width:15px;height:15px}
+.win-btn.on svg path{fill:currentColor;fill-rule:evenodd} /* 置顶激活：图钉整体实心（各子路径 evenodd 独立填充） */
+.win-btn svg{width:15px;height:15px;transition:transform .18s ease}
+/* 置顶图钉（行业规范）：未置顶顺时针倾斜 45°（待按下的图钉）；置顶时摆正竖直 + 实心主色（钉入生效） */
+.win-btn-pin svg{transform:rotate(45deg)}
+.win-btn-pin.on svg{transform:rotate(0deg)}
 
 /* ============================================================
    小火箭（右侧常驻）：hover 点火预热，点击发射回顶
@@ -2203,6 +2242,12 @@ body {
 }
 .rocket-btn .icon { width: 22px; height: 22px; }
 .rocket-btn .rocket-body { display: inline-flex; transition: transform .25s cubic-bezier(.3,1.4,.5,1); }
+
+/* 条件显隐出入场（spec 第 2 节 + 裁决⑧：弹出=弹簧族，收起=反馈族） */
+.rocket-enter-active { transition: opacity .28s cubic-bezier(.3,1.4,.5,1), transform .28s cubic-bezier(.3,1.4,.5,1); }
+.rocket-leave-active { transition: opacity .2s cubic-bezier(.3,.9,.35,1), transform .2s cubic-bezier(.3,.9,.35,1); }
+.rocket-enter-from { opacity: 0; transform: translateY(18px) scale(.85); }
+.rocket-leave-to   { opacity: 0; transform: translateY(14px) scale(.9); }
 
 /* 尾焰：默认隐藏，hover 点燃（小火苗闪烁），发射时拉成长尾 */
 .rocket-flame {

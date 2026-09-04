@@ -23,8 +23,8 @@
         <span class="win-titlebar-app">任务清单</span>
       </div>
       <div class="win-titlebar-btns">
-        <button class="win-btn" :class="{ on: winAlwaysOnTop }" @click="toggleAlwaysOnTop" title="窗口置顶" aria-label="窗口置顶">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7 6-2 8h-3.2v4h-3.6v-4H7l-2-8z"/><path d="M9.5 9l2.5 3 2.5-3"/></svg>
+        <button class="win-btn win-btn-pin" :class="{ on: winAlwaysOnTop }" @click="toggleAlwaysOnTop" :title="winAlwaysOnTop ? '取消置顶' : '窗口置顶'" :aria-label="winAlwaysOnTop ? '取消置顶' : '窗口置顶'">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M8.5 4h7v2.4h-7z"/><path d="M7 7.6h10v2.2a5 5 0 01-2.6 4.4L12 15l-2.4-.8A5 5 0 017 9.8z"/><path d="M12 15v5"/></svg>
         </button>
         <button class="win-btn" @click="winMinimize" title="最小化" aria-label="最小化">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M5 12h14"/></svg>
@@ -157,6 +157,7 @@
             <span v-if="editingTaskId === task.id" class="task-tab-edit" @click.stop>
               <input
                 v-model="editingTaskName"
+                placeholder="新项目"
                 @blur="finishRenameTask(task)"
                 @keyup.enter="finishRenameTask(task)"
                 @keyup.escape="cancelRenameTask()"
@@ -190,7 +191,7 @@
       <!-- 任务列表卡片：搜索条 + 筛选/新增 + 任务列表（主体） -->
       <div class="bug-panel">
       <!-- 吸顶区（搜索 + 筛选/新增）：页面滚动时固定在视口顶部；项目栏/顶栏随页面滚走 -->
-      <div class="panel-sticky">
+      <div class="panel-sticky" :class="{ 'is-stuck': stickyStuck }">
       <!-- 搜索条：单独一行 -->
       <div class="search-bar">
         <el-input v-model="searchText" size="large" clearable placeholder="搜索任务名称…" class="search-input-big">
@@ -292,7 +293,11 @@
             </button>
           </div>
           <div class="bug-cell bug-actions">
-            <button class="btn-del" @mousedown="onDelDown(bug, $event)" @mouseup="onDelUp(bug, $event)" aria-label="删除该任务" title="删除该任务">
+            <!-- 已完成：归档按钮（单击可逆，无确认；服务端拒删已完成，spec 第 7 节） -->
+            <button v-if="bug.status === '已完成'" class="btn-archive" @click.stop="archiveBug(bug)" aria-label="归档该任务" title="归档（列表底部归档堆可找回/恢复）">
+              <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="4.5" rx="1.2"/><path d="M5 8.5V19a1.5 1.5 0 001.5 1.5h11A1.5 1.5 0 0019 19V8.5"/><path d="M9.8 12.5h4.4"/></svg>
+            </button>
+            <button v-else class="btn-del" @mousedown="onDelDown(bug, $event)" @mouseup="onDelUp(bug, $event)" aria-label="删除该任务" title="删除该任务">
               <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16"/><path d="M9 7V4.5h6V7"/><path d="M6 7l1 13h10l1-13"/><path d="M10 11v6M14 11v6"/></svg>
             </button>
             <span class="del-confirm" :class="{show: confirmBugId===bug.id}">
@@ -342,6 +347,48 @@
           <span class="empty-icon"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="3" width="14" height="18" rx="2.5"/><path d="M9 3v2h6V3"/><path d="M8 10h8M8 14h5"/></svg></span>
           <p>暂无任务记录</p>
           <p class="empty-hint">点击「新增任务」开始记录</p>
+        </div>
+        <!-- 归档区（spec 第 7 节、裁决②）：沉面板底（margin-top:auto）；N=0 整区不渲染 -->
+        <div v-if="archivedBugs.length" class="archive-zone">
+          <button class="archive-header" :class="{ 'archive-flash': archiveFlash }" @click="toggleArchive" :title="archiveExpanded ? '收起归档' : '展开归档'">
+            <svg class="icon arch-box" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 13V7a2 2 0 012-2h12a2 2 0 012 2v6"/><path d="M4 13h5l1.5 2.5h3L15 13h5v4a2 2 0 01-2 2H6a2 2 0 01-2-2z"/></svg>
+            <span class="arch-title">归档空间</span>
+            <span class="arch-count">{{ archivedBugs.length }} 个归档任务</span>
+            <svg class="icon arch-chev" :class="{ flip: archiveExpanded }" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
+          </button>
+          <!-- 展开视图：完整行只读 + 恢复（状态下拉 disabled、无双击编辑、无删除） -->
+          <div v-if="archiveExpanded" class="archive-rows">
+            <div v-for="bug in archivedBugs" :key="bug.id" class="bug-row archive-row">
+              <div class="bug-cell bug-name">
+                <span class="name-text">{{ bug.name || '（未命名）' }}</span>
+              </div>
+              <div class="bug-cell bug-shots">
+                <div class="img-stack" v-if="(bug.images||[]).length" :style="stackWrapStyle((bug.images||[]).length)">
+                  <div
+                    v-for="(img, i) in (bug.images||[]).slice(0, 6)"
+                    :key="img"
+                    class="img-stack-card"
+                    :style="stackCardStyle(i)"
+                    @click.stop="openPreview(bug, img, $event)"
+                  ><img :src="'//' + serverHost + '/uploads/' + encodeURIComponent(img)" alt="截图" loading="lazy" decoding="async" /></div>
+                </div>
+              </div>
+              <div class="bug-cell bug-status">
+                <el-select :model-value="bug.status" disabled size="small" :class="['status-select', 'status-select-' + getStatusClass(bug.status)]"></el-select>
+              </div>
+              <div class="bug-cell bug-notes">
+                <button class="btn-note" @click.stop="openBugNotesDialog(currentTaskId, bug.id)" aria-label="查看备注" title="备注">
+                  <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.4 8.4 0 01-8.5 8.5 8.5 8.5 0 01-3.8-.9L3 21l1.9-5.7a8.5 8.5 0 01-.9-3.8 8.5 8.5 0 014.7-7.6 8.4 8.4 0 013.8-.9h.5a8.5 8.5 0 018 8z"/></svg>
+                  <span v-if="getBugNoteWriters(bug) > 0" class="notes-indicator" :class="'notes-indicator-' + Math.min(getBugNoteWriters(bug), 3)"></span>
+                </button>
+              </div>
+              <div class="bug-cell bug-actions">
+                <button class="btn-restore" @click.stop="restoreBug(bug)" title="恢复到列表（已完成组）">
+                  <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 11-2.12-9.36L23 10"/></svg>恢复
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
       </div><!-- /bug-panel -->
@@ -667,20 +714,22 @@
     <!-- 删除确认幕布（渐隐黑，浮于列表之上、行聚光之下） -->
     <div class="del-scrim" :class="{show: confirmBugId!==null}" @click="cancelDeleteConfirm()"></div>
 
-    <!-- 小火箭：右侧常驻。hover 点火预热，点击发射 + 平滑回顶 -->
-    <button class="rocket-btn" @click="launchRocket" title="回到顶部" aria-label="回到顶部">
-      <span class="rocket-body">
-        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M12 2.8c2.9 1.5 4.6 4.6 4.6 8v5.4l-1.9 1.8H9.3L7.4 16.2v-5.4c0-3.4 1.7-6.5 4.6-8z"/>
-          <circle cx="12" cy="9.2" r="1.5"/>
-          <path d="M7 12.4 4.6 11v3.6L7 15.9"/>
-          <path d="M17 12.4l2.4-1.2v3.6L17 15.9"/>
+    <!-- 小火箭：DeepSeek 式条件显隐（spec 第 2 节）——滚过 20% 且上滑才出现；hover 点火，点击发射回顶 -->
+    <transition name="rocket">
+      <button v-show="rocketVisible" class="rocket-btn" @click="launchRocket" title="回到顶部" aria-label="回到顶部">
+        <span class="rocket-body">
+          <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 2.8c2.9 1.5 4.6 4.6 4.6 8v5.4l-1.9 1.8H9.3L7.4 16.2v-5.4c0-3.4 1.7-6.5 4.6-8z"/>
+            <circle cx="12" cy="9.2" r="1.5"/>
+            <path d="M7 12.4 4.6 11v3.6L7 15.9"/>
+            <path d="M17 12.4l2.4-1.2v3.6L17 15.9"/>
+          </svg>
+        </span>
+        <svg class="rocket-flame" viewBox="0 0 24 24">
+          <path d="M12 17.5c-2.6 3-3.8 4.8-3.8 6.4a3.8 3.8 0 0 0 7.6 0c0-1.6-1.2-3.4-3.8-6.4z" fill="#FFB84D"/>
         </svg>
-      </span>
-      <svg class="rocket-flame" viewBox="0 0 24 24">
-        <path d="M12 17.5c-2.6 3-3.8 4.8-3.8 6.4a3.8 3.8 0 0 0 7.6 0c0-1.6-1.2-3.4-3.8-6.4z" fill="#FFB84D"/>
-      </svg>
-    </button>
+      </button>
+    </transition>
   </div>
 
   <!-- Vue 3 -->

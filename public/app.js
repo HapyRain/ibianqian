@@ -289,14 +289,19 @@
         }
       }
 
-      /** 小火箭：点火发射动画 + 平滑回到顶部 */
+      /** 小火箭：点火发射动画 + 平滑回顶；动画播完再退场（suppressing 抑制期间滚动不重触发） */
       function launchRocket() {
         const btn = document.querySelector('.rocket-btn');
         if (btn && !btn.classList.contains('launching')) {
           btn.classList.add('launching');
           setTimeout(() => btn.classList.remove('launching'), 1000);
         }
+        rocketSuppressing = true; // 回顶是上行，不抑制会立刻自触复现（spec 第 2 节）
         window.scrollTo({ top: 0, behavior: 'smooth' });
+        setTimeout(() => {
+          rocketSuppressing = false;
+          rocketVisible.value = false; // 发射动画（0.95s）播完再播退场
+        }, 1050);
       }
 
       /**
@@ -418,6 +423,49 @@
 
       /** 正在"渐隐"（仅剩一行时淡出）的行 id */
       const fadingBugId = ref(null);
+
+      // ==================== 滚动反馈（共用 rAF 节流监听：吸顶投影 + 小火箭显隐，spec 第 1/2 节） ====================
+      const stickyStuck = ref(false);
+      const rocketVisible = ref(false);
+      let scrollRafId = 0;
+      let lastScrollY = 0;
+      let rocketSuppressing = false; // 发射回顶期间抑制显隐判定（平滑滚动是上行，防自触复现）
+      let panelStickyEl = null;      // 吸顶区元素（onMounted 缓存）
+      let titlebarH = 0;             // 自绘标题栏高度（onMounted 量一次 DOM 真实值：0/浏览器、含 Electron 36——与 --titlebar-h 同源，裁决③真正单一事实源）
+
+      const ROCKET_PROGRESS = 0.2; // 滚动进度阈值 20%（退出线）
+      const ROCKET_UP_ENTER = 0.04; // 上行"进入缓冲"：显示线 = ROCKET_PROGRESS + 本值（滞后/迟滞，消除临界点一闪而过）
+      const ROCKET_MIN_Y = 120;    // 绝对下限：短内容瞄页脚不弹（spec 第 10 节裁决④）
+      const SCROLL_EPSILON = 2;    // 方向判定容差（防滚轮抖动翻转）
+
+      function onWinScroll() {
+        if (scrollRafId) return;
+        scrollRafId = requestAnimationFrame(() => {
+          scrollRafId = 0;
+          const y = window.scrollY;
+
+          // 吸顶投影：吸顶区顶缘贴到标题栏下沿（titlebarH 于 onMounted 量自 DOM 真实高度，与 --titlebar-h 同源）
+          if (panelStickyEl) {
+            stickyStuck.value = panelStickyEl.getBoundingClientRect().top <= titlebarH + 1;
+          }
+
+          // 小火箭状态机：显示=上行 且 进度越过(20%+进入缓冲) 且 过绝对下限；隐藏=下行 或 退回20%以内 / 低于下限（滞后消除临界一闪而过）
+          if (!rocketSuppressing) {
+            const max = document.documentElement.scrollHeight - window.innerHeight;
+            const progress = max > 0 ? y / max : 0;
+            const goingUp = y < lastScrollY - SCROLL_EPSILON;
+            const goingDown = y > lastScrollY + SCROLL_EPSILON;
+            // 进入(显示)线高于退出(隐藏)线 = 迟滞：上滑"预判"会回到 20% 顶区则不显示，避免临界点闪现一帧
+            const showEdge = ROCKET_PROGRESS + ROCKET_UP_ENTER;
+            if (goingUp && y > ROCKET_MIN_Y && progress > showEdge) {
+              rocketVisible.value = true;
+            } else if (goingDown || progress <= ROCKET_PROGRESS || y <= ROCKET_MIN_Y) {
+              rocketVisible.value = false;
+            }
+          }
+          lastScrollY = y;
+        });
+      }
 
       /** 刚插入、播放生长动画的行 id */
       const enteringBugId = ref(null);
@@ -777,7 +825,7 @@
       /** 筛选并排序后的 任务列表（先筛选再排序，同状态保持原序） */
       const filteredAndSortedBugs = computed(() => {
         const bugs = currentTask.value?.bugs || [];
-        let list = bugs;
+        let list = bugs.filter(b => !b.archived); // 归档行不进主列表/筛选/搜索/计数（spec 第 7 节）
         // 筛选
         if (statusFilter.value !== '全部') {
           list = list.filter(b => b.status === statusFilter.value);
@@ -803,13 +851,50 @@
 
       /** 各状态任务数量（用于筛选按钮显示） */
       const statusCounts = computed(() => {
-        const bugs = currentTask.value?.bugs || [];
+        const bugs = (currentTask.value?.bugs || []).filter(b => !b.archived); // 归档不计数（spec 第 7 节）
         const counts = { '全部': bugs.length };
         statusOptions.forEach(opt => {
           counts[opt] = bugs.filter(b => b.status === opt).length;
         });
         return counts;
       });
+
+      // ==================== 归档体系（spec 第 7 节） ====================
+      const archivedBugs = computed(() => {
+        const bugs = currentTask.value?.bugs || [];
+        return bugs.filter(b => b.archived).sort((a, b) => (b.archivedAt || 0) - (a.archivedAt || 0)); // 最新归档在顶卡
+      });
+      const archiveExpanded = ref(false); // 纯本地 UI 状态，不广播不同步
+      const archiveFlash = ref(false);    // 归档入堆时堆计数闪烁
+
+      function toggleArchive() { archiveExpanded.value = !archiveExpanded.value; }
+
+      /** 归档：仅已完成（服务端防线同规则）；复用删除渐隐 220ms 后出列入堆 */
+      function archiveBug(bug) {
+        if (bug.status !== '已完成' || bug.archived === true) return;
+        if (dyingBugId.value || fadingBugId.value) return; // 与删除动画互斥（同 confirmDeleteBug 守卫）
+        const targetTaskId = currentTaskId.value; // 定格点击时所属项目，防 220ms 内切项目致广播发往错项目（审查#2）
+        fadingBugId.value = bug.id;
+        setTimeout(() => {
+          fadingBugId.value = null;
+          // 220ms 内可能经历 fullSync（bugs 换成 spread 副本）或切项目：按 id 在定格项目里重查活对象，避免写到孤儿（审查#1）
+          const live = tasks.value.find(t => t.id === targetTaskId)?.bugs.find(b => b.id === bug.id);
+          if (!live) return; // 原对象已失效（被删 / 项目消失）：放弃本地归档，服务端仍会广播权威态
+          live.archived = true;
+          live.archivedAt = Date.now();
+          sendUpdate(live.id, 'archived', true, targetTaskId);
+          archiveFlash.value = true;
+          setTimeout(() => { archiveFlash.value = false; }, 700);
+        }, 220);
+      }
+
+      /** 恢复：回主列表已完成组（statusChangedAt 不变，原位排序） */
+      function restoreBug(bug) {
+        if (bug.archived !== true) return;
+        bug.archived = false;
+        delete bug.archivedAt;
+        sendUpdate(bug.id, 'archived', false);
+      }
 
       // ==================== WebSocket 连接 ====================
 
@@ -925,11 +1010,11 @@
       /**
        * 发送更新消息
        */
-      function sendUpdate(bugId, field, value) {
+      function sendUpdate(bugId, field, value, taskId = currentTaskId.value) {
         sendMessage({
           type: 'update',
           clientId,
-          data: { taskId: currentTaskId.value, bugId, field, value },
+          data: { taskId, bugId, field, value },
         });
       }
 
@@ -983,6 +1068,7 @@
        * 处理全量同步
        */
       function handleFullSync(msg) {
+        archiveExpanded.value = false; // 全量同步收起归档展开（裁决⑥）
         if (msg.data && Array.isArray(msg.data.tasks)) {
           // 合并式应用：保留在途编辑的对象引用，避免输入框绑定对象被整体替换导致内容丢失
           const incomingTasks = msg.data.tasks;
@@ -1054,7 +1140,7 @@
 
         if (!msg.change) return;
 
-        const { type, taskId, bugId, field, value, completedAt, statusChangedAt } = msg.change;
+        const { type, taskId, bugId, field, value, completedAt, statusChangedAt, archivedAt } = msg.change;
         console.log(`[WS] 收到广播: type=${type}, taskId=${taskId?.substring(0,8)}, bugId=${bugId}, field=${field}, value=${value}, completedAt=${completedAt}, 来源=${(msg.originClientId || '?').substring(0,8)}`);
 
         switch (type) {
@@ -1062,7 +1148,7 @@
             handleRemoteAdd(msg);
             break;
           case 'update':
-            handleRemoteUpdate(taskId, bugId, field, value, completedAt, statusChangedAt);
+            handleRemoteUpdate(taskId, bugId, field, value, completedAt, statusChangedAt, archivedAt);
             break;
           case 'delete':
             handleRemoteDelete(taskId, bugId);
@@ -1125,7 +1211,7 @@
       /**
        * 处理远程更新
        */
-      function handleRemoteUpdate(taskId, bugId, field, value, completedAt, statusChangedAt) {
+      function handleRemoteUpdate(taskId, bugId, field, value, completedAt, statusChangedAt, archivedAt) {
         const task = tasks.value.find(t => t.id === taskId);
         if (!task) {
           console.log(`[WS] handleRemoteUpdate: taskId=${taskId?.substring(0,8)} 未找到，请求全量同步`);
@@ -1140,7 +1226,7 @@
         }
 
         // 第三层防护：新旧值相同时跳过
-        if (bug[field] === value && completedAt === undefined && statusChangedAt === undefined) {
+        if (bug[field] === value && completedAt === undefined && statusChangedAt === undefined && archivedAt === undefined) {
           console.log(`[WS] handleRemoteUpdate: bugId=${bugId} ${field} 值相同，跳过 (${value})`);
           return;
         }
@@ -1160,6 +1246,14 @@
         // 同步 statusChangedAt（组内排序依据：新来的往组末尾）
         if (statusChangedAt !== undefined) {
           bug.statusChangedAt = statusChangedAt;
+        }
+        // 同步 archivedAt（归档时间锚点；null = 恢复时删除，与归档/恢复字段配套广播）
+        if (archivedAt !== undefined) {
+          if (archivedAt === null) {
+            delete bug.archivedAt;
+          } else {
+            bug.archivedAt = archivedAt;
+          }
         }
       }
 
@@ -2019,23 +2113,25 @@
       /** 正在编辑名称的任务 ID */
       const editingTaskId = ref(null);
       const editingTaskName = ref('');
+      let renamingNewTask = null; // 新建项目两步式提交标记 { id, prevTaskId } | null（spec 第 4 节）
 
       /**
-       * 新建项目（标签栏顶部层级，含条目列表）
+       * 新建项目（本地先行两步式，spec 第 4 节）：只在本地建临时项进入命名，
+       * 确认非空才广播 createTask；临时项期间不广播、不写 currentTask 持久化（裁决⑤，中途关窗不留脏指针）
        */
       function createTask() {
+        const prevTaskId = currentTaskId.value;
         const task = {
           id: randomUUID(),
-          name: '新项目',
+          name: '',
           bugs: [],
         };
         tasks.value.push(task);
         currentTaskId.value = task.id;
-        persistCurrentTask();
-        sendMessage({ type: 'createTask', clientId, data: { task: { id: task.id, name: task.name } } });
-        // 自动进入编辑模式
+        renamingNewTask = { id: task.id, prevTaskId };
+        // 自动进入命名（placeholder 模式：空值 + 灰字「新项目」）
         nextTick(() => {
-          startRenameTask(task);
+          startRenameTask(task, { placeholderMode: true });
         });
       }
 
@@ -2044,6 +2140,7 @@
        */
       function switchTask(taskId) {
         if (currentTaskId.value === taskId) return; // 点当前项目不重播
+        archiveExpanded.value = false; // 切项目收起归档展开（裁决⑥）
         const ids = orderedTasks.value.map(t => t.id);
         const oldIdx = ids.indexOf(currentTaskId.value);
         const newIdx = ids.indexOf(taskId);
@@ -2075,27 +2172,44 @@
       }
 
       /**
-       * 开始重命名任务
+       * 开始重命名任务（placeholderMode=新建项目命名：空值不 select，靠 placeholder 提示）
+       * 修复：模板中输入框容器类名是 .task-tab-edit（index.html:157），旧选择器 .task-name-edit 一直匹配不到，
+       *       导致聚焦/全选静默失效；此处更正为 .task-tab-edit input。
        */
-      function startRenameTask(task) {
-        editingTaskName.value = task.name;
+      function startRenameTask(task, { placeholderMode = false } = {}) {
+        editingTaskName.value = placeholderMode ? '' : task.name;
         editingTaskId.value = task.id;
         nextTick(() => {
-          const input = document.querySelector('.task-name-edit input');
+          const input = document.querySelector('.task-tab-edit input');
           if (input) {
             input.focus();
-            input.select();
+            if (!placeholderMode) input.select();
           }
         });
       }
 
       /**
-       * 完成重命名任务
+       * 完成重命名（Enter/失焦）。新建路径走两步式提交：非空→一条 createTask 广播（带最终名）；
+       * 空名→本地丢弃临时项（等于从未发生）；老项目重命名逻辑原样保留
        */
       function finishRenameTask(task) {
         if (!task) return;
         const newName = editingTaskName.value.trim();
         editingTaskId.value = null;
+
+        if (renamingNewTask && renamingNewTask.id === task.id) {
+          const { prevTaskId } = renamingNewTask;
+          renamingNewTask = null;
+          if (!newName) {
+            discardNewTask(task, prevTaskId);
+            return;
+          }
+          task.name = newName;
+          persistCurrentTask(); // 确认后才写持久化（裁决⑤）
+          sendMessage({ type: 'createTask', clientId, data: { task: { id: task.id, name: task.name } } });
+          return;
+        }
+
         if (!newName || newName === task.name) return;
         const dup = tasks.value.some(t => t.id !== task.id && t.name === newName);
         if (dup) {
@@ -2105,24 +2219,49 @@
         sendMessage({ type: 'updateTask', clientId, data: { taskId: task.id, field: 'name', value: newName } });
       }
 
+      /** 丢弃未命名的本地临时项目：移除 + 还原当前项目（persist 值从未写过 temp id，无需清理） */
+      function discardNewTask(task, prevTaskId) {
+        const index = tasks.value.findIndex(t => t.id === task.id);
+        if (index !== -1) tasks.value.splice(index, 1);
+        currentTaskId.value = prevTaskId;
+      }
+
       /**
-       * 取消重命名任务
+       * 取消重命名（Esc）。新建路径同空名：本地丢弃临时项
        */
       function cancelRenameTask() {
+        if (renamingNewTask && renamingNewTask.id === editingTaskId.value) {
+          const task = tasks.value.find(t => t.id === renamingNewTask.id);
+          const { prevTaskId } = renamingNewTask;
+          renamingNewTask = null;
+          editingTaskId.value = null;
+          editingTaskName.value = '';
+          if (task) discardNewTask(task, prevTaskId);
+          return;
+        }
         editingTaskId.value = null;
         editingTaskName.value = '';
       }
 
       /**
-       * 删除项目（至少保留一个；删项目连带清理其下所有任务的图片）
+       * 删除项目（二次确认，spec 第 3 节；项目级删除豁免任务级"已完成不可删"防线——裁决①，
+       * 有 ElMessageBox 确认 + 服务端删前快照兜底）
        */
-      function deleteTask(taskId) {
+      async function deleteTask(taskId) {
         if (tasks.value.length <= 1) {
           ElementPlus.ElMessage.warning('至少保留一个项目');
           return;
         }
         const task = tasks.value.find(t => t.id === taskId);
         if (!task) return;
+        const bugCount = (task.bugs || []).length;
+        try {
+          await ElementPlus.ElMessageBox.confirm(
+            `将删除项目「${task.name}」及其下 ${bugCount} 个任务（含已完成与已归档）、全部备注与图片。确定删除？`,
+            '删除项目',
+            { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消', confirmButtonClass: 'el-button--danger' }
+          );
+        } catch (err) { return; } // 用户取消
         const index = tasks.value.findIndex(t => t.id === taskId);
         if (index !== -1) {
           tasks.value.splice(index, 1);
@@ -3517,12 +3656,19 @@
         // 宽窗口标记
         updW();
         window.addEventListener('resize', updW);
+        // 滚动反馈：吸顶投影 + 小火箭（passive，rAF 节流见 onWinScroll）
+        panelStickyEl = document.querySelector('.panel-sticky');
+        titlebarH = document.querySelector('.win-titlebar')?.offsetHeight || 0; // 量 DOM 真实高度（裁决③：DOM 成唯一事实源，浏览器无此元素→0）
+        window.addEventListener('scroll', onWinScroll, { passive: true });
+        onWinScroll(); // 首屏主动校准一次，消除无 scroll 事件时（如会话恢复滚动位置）投影/火箭的一帧滞后（审查#3）
       });
 
       onUnmounted(() => {
         document.removeEventListener('paste', onGlobalPaste);
         document.removeEventListener('keydown', onGlobalKeydown);
         window.removeEventListener('resize', updW);
+        window.removeEventListener('scroll', onWinScroll);
+        if (scrollRafId) { cancelAnimationFrame(scrollRafId); scrollRafId = 0; }
         if (reconnectTimer) {
           clearTimeout(reconnectTimer);
           reconnectTimer = null;
@@ -3542,6 +3688,14 @@
         showStartupDialog,
         // Electron 自绘标题栏（窗口控制）
         isElectron,
+        stickyStuck,
+        rocketVisible,
+        archivedBugs,
+        archiveExpanded,
+        archiveFlash,
+        toggleArchive,
+        archiveBug,
+        restoreBug,
         winAlwaysOnTop,
         winMaximized,
         winMinimize,

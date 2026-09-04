@@ -118,7 +118,8 @@ npm run build        # electron-builder 打便携 exe → pack/任务清单.exe
 | 搜索过滤 | 工具栏按任务名称实时过滤（纯前端，与状态筛选叠加） | app.js `searchText` / `filteredAndSortedBugs` |
 | 体验改版 | 总分卡片布局（工具栏+列表一体）、暖调纸面多主题、连接三态呼吸点、SVG 图标体系、扑克牌堆多图查看器（抽卡/精准展开/缩回）、删除全链路（蓄怒+保险+覆盖删除）、新增/上传/备注按钮四态、项目栏多行+落点高亮、备注多图、响应式四栏 | Task 1-9（见 docs/specs/ 与 docs/plans/） |
 | 双层备注 | 项目级备注 + 任务级备注，按 clientId 着色区分作者；**默认只读，点「修改」展开编辑**（含上传图片），删除需二次确认，修改后时间刷新 + 「（已修改）」标记 | app.js `openNotesDialog/openBugNotesDialog`、`editingTaskNoteId` 等 |
-| 小火箭回顶 | 右下角常驻火箭按钮：hover 点火预热，点击发射动画 + 平滑回顶 | app.js `launchRocket`；style.css `.rocket-btn` |
+| 小火箭回顶 | 右下角火箭按钮（**条件显隐**：向下滚动过阈值才浮现，回顶或接近底部即隐；发射后自动收起）：hover 点火预热，点击发射动画 + 平滑回顶 | app.js `launchRocket`/`onWinScroll`；style.css `.rocket-btn` |
+| 归档体系 | **已完成的任务不能删、只能归档**：已完成行删除按钮换成「归档」（收纳箱图标，单击可逆）；点归档 → 行渐隐出列，沉到面板底部**扑克牌堆**（顶卡显示最近归档名 + ×N 计数，入堆时计数闪烁）；点「展开 N 个归档任务」看完整行（只读：状态下拉 disabled、无编辑/删除，图片可预览、备注可打开，每行一个「恢复」→ 回主列表已完成组原位）；归档行不进主列表/筛选/搜索/计数；切项目或全量同步自动收起展开（纯本地 UI 态不广播）；服务端强防线（白名单 + 归档状态机 + 已完成/归档拒删）由 test-archive-guards.js 覆盖 | app.js `archivedBugs/archiveBug/restoreBug/toggleArchive`；server.js `handleUpdate`(archived)/`handleDelete` |
 | 实时同步 | fullSync（连接时全量）+ broadcast（增量），在线人数 | server.js `handleRequestSync/broadcast` |
 | 断线重连 | 指数退避 + 随机抖动（`min(1000·2ⁿ, 30s)+rand`） | app.js `scheduleReconnect` |
 | 服务器地址记忆 | localStorage 记忆 + 连接失败提示 | app.js `onServerChange` |
@@ -137,10 +138,11 @@ npm run build        # electron-builder 打便携 exe → pack/任务清单.exe
 依赖：/vendor/* 路由映射到 node_modules/（离线化）
 ```
 
-**数据 schema**：`{ version, tasks: [{ id, name, bugs: [{ id, name, status, statusChangedAt, images[], completedAt?, assignee?, deadline?, notes[] }], notes[] }] }`
+**数据 schema**：`{ version, tasks: [{ id, name, bugs: [{ id, name, status, statusChangedAt, images[], completedAt?, assignee?, deadline?, archived?, archivedAt?, notes[] }], notes[] }] }`
 （`tasks[]` = 界面上的「项目」，`bugs[]` = 界面上的「任务」，见[术语映射](#术语映射界面--代码--数据)；
 `bug.statusChangedAt` = 状态变更时间（组内排序依据）；`bug.assignee` = 负责人 `{ clientId, name|null }`（新增即归属，随广播同步）；
 `bug.deadline` = 截止时间戳（毫秒，新增时经"下一步"面板设置，结构化字段 + 备注双重呈现；update 白名单可设可清 null）；
+`bug.archived` = 是否归档（布尔，**仅"已完成"可归档**；归档行移出主列表/筛选/搜索/计数，沉到面板底部牌堆，可原地恢复）。服务端状态机：置 true 需 status=已完成 且未归档，置 false 需已归档；`archived` 在 update 白名单内，归档行拒绝一切其它字段修改。`bug.archivedAt` = 归档时间戳（毫秒，`archived` 的伴生字段，作牌堆倒序锚点；归档写入、恢复删除，随 update 广播 `null` 通知删除——同 `completedAt` 范式）；
 `note.createdAt/updatedAt` = 创建/修改时间（"已修改"判断）；
 旧 `bug.image` 字段自动迁移为 `images` 数组，迁移前自动留 `data.json.backup-*` 备份）
 
@@ -150,6 +152,7 @@ npm run build        # electron-builder 打便携 exe → pack/任务清单.exe
 - 端口自适应：`EADDRINUSE` 时 +1，最大 3070（`startServer`；`BUGLIST_PORT` 可覆盖起始端口）。
 - 无变化不写盘不涨版本号（`transformFn` 返回 null 时跳过）。
 - 状态置"已完成"自动记录 `completedAt`，改回则删除。
+- 归档体系：置 `archived=true` 记 `archivedAt`、置 `false` 删两者（同 `completedAt` 伴生范式）；**已完成或已归档的任务拒绝删除**（服务端 handleDelete 前置校验 + 锁内二次判定，前端已完成行删除按钮已换归档按钮）——数据清理靠归档而非删除。
 - 图片上传由服务端直接写 data.json 并广播，不依赖客户端 WS；bug 不存在时自动创建。
 
 ---
@@ -213,5 +216,6 @@ npm run build        # electron-builder 打便携 exe → pack/任务清单.exe
 | 08-16 | **deadline（0.3 前置）**：回车确认标题后引出「下一步」小面板（deadline / 备注询问，跳过/确定；动画统一 0.25s）；deadline 选时间**双落库**——结构化字段 `bug.deadline`（update 白名单新增，可设可清 null）+ 自动代发备注「该任务启用 deadline：…」（借备注标识传播，不常驻首页不压人）；服务端归一化（非法值删除）+ 导入导出保留；8 项端到端验证全过；server.js 新增 `BUGLIST_PORT` 环境变量（自动化验证用独立端口） |
 | 08-16 | **深夜彩蛋**：状态正向推进 + 20:00-05:00 弹安慰语录（6 条 emoji 文案定稿，ElMessage 小提示无图标，4.5s 自动消失）——0.3 前的收尾彩蛋 |
 | 08-16 | deadline 交互迭代：「此刻」按钮改为**工时评估**（deadline 不可能=现在；弹「请评估所需工时 🌙」选 1-5 天 → 自动算当前时间+N 天填好；内置此刻按钮隐藏）；**0.2.1 定稿**（0.3 前置小点先行发布）：负责人 hover 归属 + deadline 工时评估 + 深夜彩蛋 + 主题和谐色板 |
+| 09-03 | **UX 批次（9 项，spec 第 1–9 节 + 交叉评审裁决①–⑨）**：① 吸顶区让位自绘标题栏（`--titlebar-h` 单一事实源，浏览器 0/Electron 36）+ 吸顶投影；②③ 火箭条件显隐（滚动阈值显、回顶/近底隐）+ 发射后自动收起；④ 删除项目二次确认（ElMessageBox，文案含「含已归档」）；⑤ 新建项目本地先行两步式（临时项不广播、确认才落库广播、占位「新项目」、Esc/空名丢弃，服务端兜底名同步改「新项目」）；⑥ 启动弹窗 clamp 流体适配（600×530 免滚动、卡片 wrap 替代断点竖排）；⑦ **归档体系**（已完成拒删、删除按钮换归档、面板底扑克牌堆 + 展开只读 + 原地恢复、`archived/archivedAt` 白名单 + 状态机 + `handleAdd`/导入归一化，`test-archive-guards.js` 16 项覆盖）；⑧ 贴底布局 + 页脚折叠线下；⑨ 全宽拖拽无跳变（header-right `margin-left:auto`+wrap、按钮文字 max-width 平滑收起、断点离散覆盖改 clamp）；最小窗 600×530。全 6 集成测试绿 |
 
 > 旧产物目录（dist/release/pack10-14）与 pack.zip 已于 2026-07-18 清理删除；`pack15/`、`pack814/` 为历史产物，当前输出 `pack/`。

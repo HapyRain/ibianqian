@@ -242,7 +242,7 @@ function createWindow(port) {
     width: 900,
     height: 600,
     minWidth: 600,
-    minHeight: 400,
+    minHeight: 530, /* 最小窗 600×530（spec 第 9 节）：保证启动弹窗与贴底面板在极限小窗下仍完整可用 */
     title: '任务清单 - 多人协同',
     icon: APP_ICON_PATH, // 窗口/任务栏图标（Windows 上显式指定，避免默认 Electron 图标）
     frame: false, // 自绘标题栏（HTML 承载拖拽与窗口控制按钮，含"置顶"）
