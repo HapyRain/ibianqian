@@ -353,10 +353,3 @@ app.on('before-quit', () => {
 app.on('window-all-closed', () => {
   // 不自动退出，由托盘控制
 });
-
-app.on('activate', () => {
-  // macOS: 点击 Dock 图标时显示窗口
-  if (mainWindow) {
-    mainWindow.show();
-  }
-});

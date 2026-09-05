@@ -14,60 +14,12 @@
  * 运行方式：node test-note-ownership.js
  * 隔离：通过 BUGLIST_DATA_ROOT 指向临时目录，绝不触碰真实 D:\Bug清单 数据。
  */
-const fs = require('fs');
-const os = require('os');
-const path = require('path');
-
-// ⚠️ 必须在 require('../server') 之前设置数据目录（server.js 在 require 时计算 DATA_ROOT）
-const DATA_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'buglist-note-'));
-process.env.BUGLIST_DATA_ROOT = DATA_ROOT;
-
+// ⚠️ 先 require helpers（副作用设置 BUGLIST_DATA_ROOT），再 require server —— 顺序不可反
+const H = require('./helpers');
 const { startServer } = require('../server');
-const WebSocket = require('ws');
+const { DATA_ROOT, assert, sleep, readData, connectWS, teardown, getCounts, onFatal } = H;
 
-let passed = 0;
-let failed = 0;
-
-function assert(condition, name) {
-  if (condition) {
-    console.log(`  [PASS] ${name}`);
-    passed++;
-  } else {
-    console.log(`  [FAIL] ${name}`);
-    failed++;
-  }
-}
-
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function readData() {
-  return JSON.parse(fs.readFileSync(path.join(DATA_ROOT, 'data.json'), 'utf-8'));
-}
-
-/** 建立 WS 连接，自动收集收到的消息 */
-function connectWS(port, label) {
-  const ws = new WebSocket(`ws://localhost:${port}`);
-  const messages = [];
-  ws.on('message', (raw) => {
-    try { messages.push(JSON.parse(raw.toString())); } catch (e) { /* 忽略非 JSON */ }
-  });
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(`${label} WS 连接超时`)), 5000);
-    ws.on('open', () => {
-      clearTimeout(timer);
-      resolve({
-        ws,
-        messages,
-        send(obj) { ws.send(JSON.stringify(obj)); },
-        close() { try { ws.close(); } catch (e) { /* 忽略 */ } },
-        count(pred) { return messages.filter(pred).length; },
-      });
-    });
-    ws.on('error', (err) => { clearTimeout(timer); reject(err); });
-  });
-}
+// assert/sleep/readData/connectWS（含 count）见 helpers
 
 function isDeleteNoteBroadcast(msg, noteId) {
   return !!msg && msg.type === 'broadcast' && !!msg.change &&
@@ -174,19 +126,12 @@ async function runTests() {
     assert(clientB.count((m) => isDeleteBugNoteBroadcast(m, 'note-bug-1')) === bDelBugBefore2 + 1,
       'A 删除 bug 级备注后 B 收到 deleteBugNote 广播');
   } finally {
-    if (clientA) clientA.close();
-    if (clientB) clientB.close();
-    if (httpServer) httpServer.close();
-    await sleep(200);
-    try { fs.rmSync(DATA_ROOT, { recursive: true, force: true }); } catch (e) { /* 忽略清理失败 */ }
+    await teardown(httpServer, clientA, clientB);
   }
 
+  const { passed, failed } = getCounts();
   console.log(`\n=== 备注归属权限测试结果: ${passed} 通过, ${failed} 失败 ===\n`);
   process.exit(failed > 0 ? 1 : 0);
 }
 
-runTests().catch((err) => {
-  console.error('测试脚本异常:', err);
-  try { fs.rmSync(DATA_ROOT, { recursive: true, force: true }); } catch (e) { /* 忽略 */ }
-  process.exit(1);
-});
+runTests().catch(onFatal);

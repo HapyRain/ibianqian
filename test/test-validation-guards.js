@@ -18,53 +18,16 @@
  * 运行方式：node test-validation-guards.js
  * 隔离：通过 BUGLIST_DATA_ROOT 指向临时目录，绝不触碰真实 D:\Bug清单 数据。
  */
-const http = require('http');
-const fs = require('fs');
-const os = require('os');
-const path = require('path');
-
-// ⚠️ 必须在 require('../server') 之前设置数据目录（server.js 在 require 时计算 DATA_ROOT）
-const DATA_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'buglist-guards-'));
-process.env.BUGLIST_DATA_ROOT = DATA_ROOT;
-const UPLOADS_DIR = path.join(DATA_ROOT, 'uploads');
-
+// ⚠️ 先 require helpers（副作用设置 BUGLIST_DATA_ROOT），再 require server —— 顺序不可反
+const H = require('./helpers');
 const { startServer } = require('../server');
-const WebSocket = require('ws');
+const {
+  DATA_ROOT,
+  assert, sleep, readData, listUploads, countBroadcasts,
+  connectWS, httpUpload, PNG_BUFFER, teardown, getCounts, onFatal,
+} = H;
 
-let passed = 0;
-let failed = 0;
-
-function assert(condition, name) {
-  if (condition) {
-    console.log(`  [PASS] ${name}`);
-    passed++;
-  } else {
-    console.log(`  [FAIL] ${name}`);
-    failed++;
-  }
-}
-
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function readData() {
-  return JSON.parse(fs.readFileSync(path.join(DATA_ROOT, 'data.json'), 'utf-8'));
-}
-
-function listUploads() {
-  try {
-    return fs.readdirSync(UPLOADS_DIR);
-  } catch (e) {
-    return [];
-  }
-}
-
-// 1x1 透明 PNG（合法 PNG 魔数 89504E47...，8 字节签名完整，可过服务端魔数校验）
-const PNG_BUFFER = Buffer.from(
-  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==',
-  'base64'
-);
+// 1x1 透明 PNG 见 helpers；本文件专用的两个坏样本如下：
 
 // 伪 webp：RIFF 容器头 + 'AAAA'（缺少偏移 8 处的 'WEBP' 标记）+ 垃圾字节
 const FAKE_WEBP_BUFFER = Buffer.concat([
@@ -79,70 +42,7 @@ const BAD_PNG_BUFFER = Buffer.concat([
   Buffer.from('broken-png-body-here', 'ascii'),
 ]);
 
-/** 建立 WS 连接，自动收集收到的消息 */
-function connectWS(port, label) {
-  const ws = new WebSocket(`ws://localhost:${port}`);
-  const messages = [];
-  ws.on('message', (raw) => {
-    try { messages.push(JSON.parse(raw.toString())); } catch (e) { /* 忽略非 JSON */ }
-  });
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(`${label} WS 连接超时`)), 5000);
-    ws.on('open', () => {
-      clearTimeout(timer);
-      resolve({
-        ws,
-        messages,
-        send(obj) { ws.send(JSON.stringify(obj)); },
-        close() { try { ws.close(); } catch (e) { /* 忽略 */ } },
-      });
-    });
-    ws.on('error', (err) => { clearTimeout(timer); reject(err); });
-  });
-}
-
-/** 手工构造 multipart/form-data 并 POST /api/upload（headers 可自定义，declaredMime 为 part 内 Content-Type） */
-function httpUpload(port, headers, fileBuffer, filename, declaredMime) {
-  return new Promise((resolve, reject) => {
-    const boundary = '----BuglistTestBoundary' + Date.now() + Math.random().toString(36).slice(2);
-    const partHeader =
-      `--${boundary}\r\n` +
-      `Content-Disposition: form-data; name="file"; filename="${filename}"\r\n` +
-      `Content-Type: ${declaredMime || 'application/octet-stream'}\r\n\r\n`;
-    const header = Buffer.from(partHeader, 'utf-8');
-    const footer = Buffer.from(`\r\n--${boundary}--\r\n`, 'utf-8');
-    const body = Buffer.concat([header, fileBuffer, footer]);
-
-    const req = http.request({
-      host: 'localhost',
-      port,
-      path: '/api/upload',
-      method: 'POST',
-      headers: {
-        'Content-Type': `multipart/form-data; boundary=${boundary}`,
-        'Content-Length': body.length,
-        ...headers,
-      },
-    }, (res) => {
-      const chunks = [];
-      res.on('data', (c) => chunks.push(c));
-      res.on('end', () => {
-        const text = Buffer.concat(chunks).toString('utf-8');
-        let parsed = null;
-        try { parsed = JSON.parse(text); } catch (e) { /* 非 JSON 响应 */ }
-        resolve({ statusCode: res.statusCode, body: parsed, raw: text });
-      });
-    });
-    req.on('error', reject);
-    req.write(body);
-    req.end();
-  });
-}
-
-/** 统计某客户端收到的 broadcast 消息数 */
-function countBroadcasts(client) {
-  return client.messages.filter(m => m.type === 'broadcast').length;
-}
+// connectWS / httpUpload / countBroadcasts 见 helpers
 
 async function runTests() {
   console.log('\n=== 校验防护测试 ===\n');
@@ -314,19 +214,12 @@ async function runTests() {
       assert(listUploads().length === 1 && listUploads()[0] === fPng, '超大文件上传后 uploads/ 无残留（仅剩之前真实 PNG）');
     }
   } finally {
-    if (clientA) clientA.close();
-    if (clientB) clientB.close();
-    if (httpServer) httpServer.close();
-    await sleep(200);
-    try { fs.rmSync(DATA_ROOT, { recursive: true, force: true }); } catch (e) { /* 忽略清理失败 */ }
+    await teardown(httpServer, clientA, clientB);
   }
 
+  const { passed, failed } = getCounts();
   console.log(`\n=== 校验防护测试结果: ${passed} 通过, ${failed} 失败 ===\n`);
   process.exit(failed > 0 ? 1 : 0);
 }
 
-runTests().catch((err) => {
-  console.error('测试脚本异常:', err);
-  try { fs.rmSync(DATA_ROOT, { recursive: true, force: true }); } catch (e) { /* 忽略 */ }
-  process.exit(1);
-});
+runTests().catch(onFatal);

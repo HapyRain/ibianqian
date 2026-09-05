@@ -23,6 +23,30 @@
 (function () {
   'use strict';
 
+  /* ---- 装饰皮肤生成器：多套主题的 extra 复用，产出的 CSS 与手写版逐字符一致 ---- */
+  // 双层错位细点纸纹噪点（纯静态装饰）。rgb="r,g,b"，a1/a2=粗细两层点透明度，size=粗层间距 px（细层取其半），ox/oy=细层偏移 px，op=可选整体不透明度（字符串）
+  function paperTexture(rgb, a1, a2, size, ox, oy, op) {
+    return 'body::before{content:"";position:fixed;inset:0;z-index:0;pointer-events:none;' +
+      'background-image:radial-gradient(rgba(' + rgb + ',' + a1 + ') 1px,transparent 1.1px),radial-gradient(rgba(' + rgb + ',' + a2 + ') 1px,transparent 1.15px);' +
+      'background-size:' + size + 'px ' + size + 'px,' + size / 2 + 'px ' + size / 2 + 'px;background-position:0 0,' + ox + 'px ' + oy + 'px;background-attachment:fixed' +
+      (op ? ';opacity:' + op : '') + '}' +
+      '#app{position:relative;z-index:1}';
+  }
+  // 视口锚定霓虹网格背景
+  function neonGrid(rgb, size) {
+    return 'body{background-color:var(--bg);background-image:linear-gradient(' + rgb + ' 1px,transparent 1px),linear-gradient(90deg,' + rgb + ' 1px,transparent 1px);background-size:' + size + 'px ' + size + 'px;background-attachment:fixed}';
+  }
+  // 主按钮/火箭的霓虹主色 glow（纯装饰增强）。hoverA=主按钮 hover 光晕透明度，addBlur/addA/addB=次按钮光晕参数
+  function neonGlow(hoverA, addBlur, addA, addB) {
+    return '.btn-add-task{box-shadow:0 0 10px rgba(var(--primary-rgb),.35),0 2px 6px rgba(var(--primary-rgb),.25)}' +
+      '.btn-add-task:hover{box-shadow:0 0 18px rgba(var(--primary-rgb),' + hoverA + '),0 4px 12px rgba(var(--primary-rgb),.3)}' +
+      '.btn-add,.rocket-btn{box-shadow:0 0 ' + addBlur + 'px rgba(var(--primary-rgb),' + addA + '),0 6px 16px rgba(var(--primary-rgb),' + addB + ')}';
+  }
+  // 角落晨光/夜光（固定 900px 420px 椭圆、62% 处淡出）
+  function cornerGlow(rgba, at) {
+    return 'body{background-image:radial-gradient(900px 420px at ' + at + ',' + rgba + ',transparent 62%)}';
+  }
+
   window.BUGLIST_THEMES = [
     /* ==================== 浅色 5 套 ==================== */
     {
@@ -51,11 +75,7 @@
       shadow: 98,
       radius: 10,
       extra:
-        '/* 冷灰纸面：极淡纸纹噪点（两层错位细点，等效不透明度 <1%，纯静态装饰） */' +
-        'body::before{content:"";position:fixed;inset:0;z-index:0;pointer-events:none;' +
-        'background-image:radial-gradient(rgba(31,36,46,.05) 1px,transparent 1.1px),radial-gradient(rgba(31,36,46,.03) 1px,transparent 1.15px);' +
-        'background-size:26px 26px,13px 13px;background-position:0 0,5px 8px;background-attachment:fixed}' +
-        '#app{position:relative;z-index:1}',
+        '/* 冷灰纸面：极淡纸纹噪点（两层错位细点，等效不透明度 <1%，纯静态装饰） */' + paperTexture('31,36,46', '.05', '.03', 26, 5, 8),
       vars: {
         bg: '#E8EBEF', surface: '#F4F6F9', 'surface-hi': '#FCFDFE',
         line: '#D8DDE3', 'line-soft': '#E7EBF0',
@@ -73,11 +93,7 @@
       headerBg: 'surface-hi',
       shadow: 90,
       radius: 11,
-      extra:
-        'body::before{content:"";position:fixed;inset:0;z-index:0;pointer-events:none;' +
-        'background-image:radial-gradient(rgba(46,74,51,.05) 1px,transparent 1.1px),radial-gradient(rgba(46,74,51,.035) 1px,transparent 1.15px);' +
-        'background-size:24px 24px,12px 12px;background-position:0 0,6px 9px;background-attachment:fixed;opacity:.55}' +
-        '#app{position:relative;z-index:1}',
+      extra: paperTexture('46,74,51', '.05', '.035', 24, 6, 9, '.55'),
       vars: {
         bg: '#C7E8CB', surface: '#FCFCF7', 'surface-hi': '#EEF6F0',
         line: '#AFCEB6', 'line-soft': '#C5DDC9',
@@ -138,8 +154,7 @@
       shadow: 95,
       radius: 12,
       extra:
-        '/* 樱粉晨雾：右上角极淡粉色晨光 */' +
-        'body{background-image:radial-gradient(900px 420px at 82% -8%,rgba(217,95,139,.07),transparent 62%)}',
+        '/* 樱粉晨雾：右上角极淡粉色晨光 */' + cornerGlow('rgba(217,95,139,.07)', '82% -8%'),
       vars: {
         bg: '#F7E8EE', surface: '#FBF1F5', 'surface-hi': '#FEF8FA',
         line: '#F0DCE4', 'line-soft': '#F5E6EC',
@@ -280,8 +295,7 @@
       shadow: 120,
       radius: 12,
       extra:
-        '/* 蔷薇暮色：左上角极淡玫瑰金夜光 */' +
-        'body{background-image:radial-gradient(900px 420px at 18% -6%,rgba(244,143,177,.08),transparent 62%)}',
+        '/* 蔷薇暮色：左上角极淡玫瑰金夜光 */' + cornerGlow('rgba(244,143,177,.08)', '18% -6%'),
       vars: {
         bg: '#2A1620', surface: '#33202C', 'surface-hi': '#3D2A37',
         line: '#4A3140', 'line-soft': '#382432',
@@ -301,13 +315,7 @@
       radius: 10,
       extra:
         '/* 赛博朋克：淡青网格线（视口锚定）+ 霓虹 glow（纯装饰） */' +
-        'body{background-color:var(--bg);' +
-        'background-image:' +
-        'linear-gradient(rgba(0,229,255,.045) 1px,transparent 1px),linear-gradient(90deg,rgba(0,229,255,.045) 1px,transparent 1px);' +
-        'background-size:44px 44px;background-attachment:fixed}' +
-        '.btn-add-task{box-shadow:0 0 10px rgba(var(--primary-rgb),.35),0 2px 6px rgba(var(--primary-rgb),.25)}' +
-        '.btn-add-task:hover{box-shadow:0 0 18px rgba(var(--primary-rgb),.55),0 4px 12px rgba(var(--primary-rgb),.3)}' +
-        '.btn-add,.rocket-btn{box-shadow:0 0 14px rgba(var(--primary-rgb),.45),0 6px 16px rgba(var(--primary-rgb),.35)}' +
+        neonGrid('rgba(0,229,255,.045)', 44) + neonGlow('.55', 14, '.45', '.35') +
         '.task-tab-active{box-shadow:0 0 12px rgba(var(--primary-rgb),.45)}',
       vars: {
         bg: '#0A0A12', surface: '#131322', 'surface-hi': '#1D1D33',
@@ -328,19 +336,14 @@
       radius: 10,
       extra:
         '/* 黑客帝国：淡网格 + 三列代码雨（不同速度/位置/透明度，纯装饰不挡操作） */' +
-        'body{background-color:var(--bg);' +
-        'background-image:linear-gradient(rgba(0,230,118,.04) 1px,transparent 1px),linear-gradient(90deg,rgba(0,230,118,.04) 1px,transparent 1px);' +
-        'background-size:40px 40px;background-attachment:fixed}' +
+        neonGrid('rgba(0,230,118,.04)', 40) +
         '@keyframes dmatrixRain{0%{transform:translateY(-100%)}100%{transform:translateY(100vh)}}' +
         'body::before,body::after,#app::before{content:"01010\\a 11001\\a 00110\\a 10100\\a 01101\\a 10010\\a 01011\\a 00101\\a 11000\\a 10110\\a 01100\\a 10001";position:fixed;top:0;font:12px/1.5 monospace;white-space:pre;z-index:0;pointer-events:none;animation:dmatrixRain 12s linear infinite}' +
         'body::before{left:6%;color:rgba(0,255,65,.3)}' +
         'body::after{left:40%;color:rgba(0,255,65,.2);content:"10101\\a 01010\\a 11001\\a 00111\\a 10010\\a 01100\\a 10100\\a 01011\\a 11010\\a 00101\\a 11100\\a 01001";animation-duration:17s;animation-delay:-11s}' +
         '#app{position:relative;z-index:1}' +
         '#app::before{left:74%;color:rgba(0,255,65,.16);animation-duration:22s;animation-delay:-6s}' +
-        '/* 霓虹绿 glow：主按钮/火箭 */' +
-        '.btn-add-task{box-shadow:0 0 10px rgba(var(--primary-rgb),.35),0 2px 6px rgba(var(--primary-rgb),.25)}' +
-        '.btn-add-task:hover{box-shadow:0 0 18px rgba(var(--primary-rgb),.5),0 4px 12px rgba(var(--primary-rgb),.3)}' +
-        '.btn-add,.rocket-btn{box-shadow:0 0 12px rgba(var(--primary-rgb),.4),0 6px 16px rgba(var(--primary-rgb),.3)}',
+        '/* 霓虹绿 glow：主按钮/火箭 */' + neonGlow('.5', 12, '.4', '.3'),
       vars: {
         bg: '#0A120A', surface: '#0F1A0F', 'surface-hi': '#16261A',
         line: '#1F3A26', 'line-soft': '#14261A',
@@ -413,7 +416,7 @@
     return ((n >> 16) & 255) + ',' + ((n >> 8) & 255) + ',' + (n & 255);
   }
 
-  /** 供 app.js 在主题切换时同步派生 JS 侧色板（与 buildThemeCss 同源） */
+  /** 供 app.js 在主题切换时同步派生 JS 侧色板（负责人/备注强调色的唯一来源） */
   window.deriveNotePalette = deriveNotePalette;
 
   /**
@@ -440,23 +443,16 @@
 
     /* ---- 自动派生的 rgb 三元组（rgba(var(--xxx-rgb), a) 用法） ---- */
     css += '--primary-rgb:' + rgbTriplet(v.primary) + ';--danger-rgb:' + rgbTriplet(v.danger) + ';';
-    css += '--ok-rgb:' + rgbTriplet(v.ok) + ';--warn-rgb:' + rgbTriplet(v.warn) + ';--text-rgb:' + rgbTriplet(v.text) + ';';
+    css += '--text-rgb:' + rgbTriplet(v.text) + ';';
     css += '--status-pending-rgb:' + rgbTriplet(v['status-pending']) + ';--status-fixing-rgb:' + rgbTriplet(v['status-fixing']) + ';--status-done-rgb:' + rgbTriplet(v['status-done']) + ';';
     css += '--ok-dot-rgb:' + rgbTriplet(v['ok-dot'] || v.ok) + ';--conn-ing-rgb:' + rgbTriplet(v['conn-ing'] || v.warn) + ';';
 
     /* ---- color-mix 软色（淡化底 / 描边 / 加深，主题联动） ---- */
     css += '--primary-soft:color-mix(in srgb,var(--primary) 13%,var(--surface));';
-
-    /* ---- 主题和谐强调色（负责人 hover 标签 / 备注作者色点色板，随主题联动） ---- */
-    var notePal = deriveNotePalette(v.primary);
-    css += '--note-c1:' + notePal[0] + ';--note-c2:' + notePal[1] + ';--note-c3:' + notePal[2] + ';';
-    css += '--note-c4:' + notePal[3] + ';--note-c5:' + notePal[4] + ';--note-c6:' + notePal[5] + ';';
     css += '--primary-line:color-mix(in srgb,var(--primary) 22%,transparent);';
     css += '--primary-deep:color-mix(in srgb,var(--primary) 82%,#000);';
     css += '--danger-soft:color-mix(in srgb,var(--danger) 9%,var(--surface-hi));';
     css += '--danger-line:color-mix(in srgb,var(--danger) 30%,transparent);';
-    css += '--ok-soft:color-mix(in srgb,var(--ok) 14%,var(--surface));';
-    css += '--ok-line:color-mix(in srgb,var(--ok) 26%,transparent);';
     css += '--warn-soft:color-mix(in srgb,var(--warn) 16%,var(--surface));';
     css += '--warn-line:color-mix(in srgb,var(--warn) 32%,transparent);';
     css += '--warn-deep:color-mix(in srgb,var(--warn) 45%,var(--text));';

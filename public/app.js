@@ -4,10 +4,10 @@
  * 包含：数据绑定、表格编辑、WebSocket 客户端、断线重连
  */
 (function () {
-  const { createApp, ref, reactive, computed, watch, onMounted, onUnmounted, nextTick, toRaw } = Vue;
+  const { createApp, ref, computed, watch, onMounted, onUnmounted, nextTick } = Vue;
 
   // ==================== UUID 兼容 ====================
-  function uuid() {
+  function randomUUID() {
     if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
       return crypto.randomUUID();
     }
@@ -18,15 +18,16 @@
       return v.toString(16);
     });
   }
-  const randomUUID = uuid;
+
+  /** 一次性 class 动效：加 cls，ms 后移除播完静止（动效仅 JS 触发） */
+  function pulse(el, cls, ms) {
+    if (!el) return;
+    el.classList.add(cls);
+    setTimeout(() => el.classList.remove(cls), ms);
+  }
 
   const app = createApp({
     setup() {
-      // ==================== 诊断 ====================
-      console.log('[Init] electronAPI 可用:', !!(window.electronAPI));
-      console.log('[Init] writeBackup 可用:', typeof window.electronAPI?.writeBackup);
-      console.log('[Init] getLocalIp 可用:', typeof window.electronAPI?.getLocalIp);
-
       // ==================== Electron 自绘标题栏（窗口控制） ====================
       /** 是否 Electron 桌面版（浏览器版不渲染标题栏） */
       const isElectron = !!window.electronAPI?.windowControls;
@@ -68,36 +69,40 @@
       const themeMenuX = ref(0);
       const themeMenuY = ref(0);
 
-      /**
-       * 切换主题面板：记录按钮位置作为面板锚点（面板宽 230px，右缘对齐按钮右缘）
-       */
-      function toggleThemeMenu(e) {
-        if (themeMenuLeaving.value) return; // 退场动画期间忽略连点
-        themeMenuVisible.value = !themeMenuVisible.value;
-        if (themeMenuVisible.value && e && e.currentTarget) {
-          const r = e.currentTarget.getBoundingClientRect();
-          themeMenuX.value = Math.max(8, Math.round(r.right - 230));
-          themeMenuY.value = Math.min(Math.round(r.bottom + 8), Math.max(8, window.innerHeight - 120));
-        }
-      }
-
-      /** 渐隐关闭主题面板（播放退场动画后隐藏，避免直接消失突兀） */
-      function closeThemeMenu() {
-        if (!themeMenuVisible.value || themeMenuLeaving.value) return;
-        themeMenuLeaving.value = true;
-        setTimeout(() => {
-          themeMenuVisible.value = false;
-          themeMenuLeaving.value = false;
-        }, 200); // 与 .theme-popover.leaving 退场动画时长一致
-      }
-
       // ==================== 更多菜单（设置 / 导出 / 导入） ====================
       const moreMenuVisible = ref(false);
-      const moreMenuLeaving = ref(false);
       const moreMenuX = ref(0);
       const moreMenuY = ref(0);
       /** 隐藏的导入文件选择器 */
       const importFileInput = ref(null);
+
+      /**
+       * 气泡面板共用开关逻辑（主题 / 更多菜单）：togglePopover 开关 + 按按钮位置记锚点（右缘对齐）；
+       * fadeClose 渐隐关闭（播放退场动画后隐藏，避免直接消失突兀；仅有 .leaving 样式的面板使用）
+       */
+      function togglePopover(e, s, width) {
+        if (s.leaving && s.leaving.value) return; // 退场动画期间忽略连点
+        s.visible.value = !s.visible.value;
+        if (s.visible.value && e && e.currentTarget) {
+          const r = e.currentTarget.getBoundingClientRect();
+          s.x.value = Math.max(8, Math.round(r.right - width));
+          s.y.value = Math.min(Math.round(r.bottom + 8), Math.max(8, window.innerHeight - 120));
+        }
+      }
+      function fadeClose(s) {
+        if (!s.visible.value || s.leaving.value) return;
+        s.leaving.value = true;
+        setTimeout(() => {
+          s.visible.value = false;
+          s.leaving.value = false;
+        }, 200); // 与 .theme-popover.leaving 退场动画时长一致
+      }
+      const themeMenu = { visible: themeMenuVisible, leaving: themeMenuLeaving, x: themeMenuX, y: themeMenuY };
+      const moreMenu = { visible: moreMenuVisible, x: moreMenuX, y: moreMenuY };
+      function toggleThemeMenu(e) { togglePopover(e, themeMenu, 230); } // 面板宽 230px
+      function closeThemeMenu() { fadeClose(themeMenu); }
+      function toggleMoreMenu(e) { togglePopover(e, moreMenu, 190); } // 面板宽 190px
+      function closeMoreMenu() { moreMenu.visible.value = false; }
 
       // ==================== 设置面板 + 快捷键（存本机 localStorage，不进服务器） ====================
       const SETTINGS_KEY = 'buglist_settings';
@@ -244,26 +249,6 @@
         window.removeEventListener('keydown', onRecordKeydown);
       });
 
-      function toggleMoreMenu(e) {
-        if (moreMenuLeaving.value) return; // 退场动画期间忽略连点
-        moreMenuVisible.value = !moreMenuVisible.value;
-        if (moreMenuVisible.value && e && e.currentTarget) {
-          const r = e.currentTarget.getBoundingClientRect();
-          moreMenuX.value = Math.max(8, Math.round(r.right - 190));
-          moreMenuY.value = Math.min(Math.round(r.bottom + 8), Math.max(8, window.innerHeight - 120));
-        }
-      }
-
-      /** 渐隐关闭更多菜单 */
-      function closeMoreMenu() {
-        if (!moreMenuVisible.value || moreMenuLeaving.value) return;
-        moreMenuLeaving.value = true;
-        setTimeout(() => {
-          moreMenuVisible.value = false;
-          moreMenuLeaving.value = false;
-        }, 200);
-      }
-
       /**
        * 导出数据：拉取 /api/export 并下载 JSON 备份
        */
@@ -292,10 +277,7 @@
       /** 小火箭：点火发射动画 + 平滑回顶；动画播完再退场（suppressing 抑制期间滚动不重触发） */
       function launchRocket() {
         const btn = document.querySelector('.rocket-btn');
-        if (btn && !btn.classList.contains('launching')) {
-          btn.classList.add('launching');
-          setTimeout(() => btn.classList.remove('launching'), 1000);
-        }
+        if (btn && !btn.classList.contains('launching')) pulse(btn, 'launching', 1000);
         rocketSuppressing = true; // 回顶是上行，不抑制会立刻自触复现（spec 第 2 节）
         window.scrollTo({ top: 0, behavior: 'smooth' });
         setTimeout(() => {
@@ -400,9 +382,6 @@
           applyTheme(id);                    // 幕布全屏时换肤，视觉零跳变
           rebuildLayer.classList.remove('show');
         }, 520));
-        rebuildTimers.push(setTimeout(() => {
-          rebuildLayer.classList.remove('show'); // 兜底（与上同效，防异常态残留）
-        }, 1200));
       }
       // setup 阶段立即应用已保存主题（早于首帧渲染，避免默认色闪烁；首载不过渡）
       applyTheme(themeId.value);
@@ -513,19 +492,6 @@
       function onTaskDragEnd() {
         dragTaskId.value = null;
         clearDropHighlights(); // 拖拽结束兜底：清除任何残留落点高亮
-      }
-      function onTaskDrop(targetId) {
-        const from = dragTaskId.value;
-        dragTaskId.value = null;
-        if (!from || from === targetId) return;
-        const order = orderedTasks.value.map(t => t.id);
-        const fromIdx = order.indexOf(from);
-        if (fromIdx === -1) return;
-        order.splice(fromIdx, 1);
-        const toIdx = order.indexOf(targetId); // 移除后重算
-        order.splice(toIdx, 0, from);
-        taskOrder.value = order;
-        persistTaskOrder();
       }
 
       /** 拖到标签栏空白处：把任务移到列表末尾 */
@@ -727,17 +693,11 @@
       /** 编辑前的名称（用于取消时恢复） */
       let editNameBackup = '';
 
-      /** 名称输入框引用 */
-      const nameInputRef = ref(null);
-
       /** 图片上传：当前正在操作的任务 ID（用于文件选择器关联） */
       const currentImageBugId = ref(null);
 
       /** 大图预览对话框可见性 */
       const imagePreviewVisible = ref(false);
-
-      /** 当前预览的图片 URL */
-      const previewImageUrl = ref('');
 
       /** 当前预览的图片集合（多图） */
       const previewImages = ref([]);
@@ -745,14 +705,14 @@
       /** 当前预览的图片索引 */
       const previewIndex = ref(0);
 
+      /** 当前预览图片 URL：由 previewImages[previewIndex] 派生（模板直接渲染 previewImages，此值仅供预加载器） */
+      const previewImageUrl = computed(() => '//' + serverHost.value + '/uploads/' + encodeURIComponent(previewImages.value[previewIndex.value]));
+
       /** 当前预览的图片归属 bug（牌堆预览才有；备注图预览为 null → 查看器不显示删除钮） */
       const previewBug = ref(null);
 
       /** 查看器内删除确认框可见性 */
       const previewDeleteVisible = ref(false);
-
-      /** 正在上传中的任务 ID（用于 loading 遮罩） */
-      const uploadingBugId = ref(null);
 
       /** 隐藏文件输入框引用 */
       const fileInputRef = ref(null);
@@ -1190,17 +1150,36 @@
       }
 
       /**
+       * 广播定位公共路径：本地找不到 task（或 bug）＝状态漂移 → 请求全量同步并返回 null
+       */
+      function locateTask(taskId, who) {
+        const task = tasks.value.find(t => t.id === taskId);
+        if (!task) {
+          console.log(`[WS] ${who}: taskId=${taskId?.substring(0, 8)} 未找到，请求全量同步`);
+          sendMessage({ type: 'requestSync', clientId });
+        }
+        return task || null;
+      }
+      function locateBug(taskId, bugId, who) {
+        const task = locateTask(taskId, who);
+        if (!task) return null;
+        const bug = task.bugs.find(b => b.id === bugId);
+        if (!bug) {
+          console.log(`[WS] ${who}: bugId=${bugId} 在 taskId=${taskId?.substring(0, 8)} 中未找到，请求全量同步`);
+          sendMessage({ type: 'requestSync', clientId });
+          return null;
+        }
+        return { task, bug };
+      }
+
+      /**
        * 处理远程新增
        */
       function handleRemoteAdd(msg) {
         const change = msg.change;
         if (!change || !change.bug || !change.taskId) return;
-        const task = tasks.value.find(t => t.id === change.taskId);
-        if (!task) {
-          console.log(`[WS] handleRemoteAdd: taskId=${change.taskId?.substring(0,8)} 未找到，请求全量同步`);
-          sendMessage({ type: 'requestSync', clientId });
-          return;
-        }
+        const task = locateTask(change.taskId, 'handleRemoteAdd');
+        if (!task) return;
         const newBug = { ...change.bug };
         // 检查是否已存在（防重复）
         if (!task.bugs.some(b => b.id === newBug.id)) {
@@ -1212,18 +1191,9 @@
        * 处理远程更新
        */
       function handleRemoteUpdate(taskId, bugId, field, value, completedAt, statusChangedAt, archivedAt) {
-        const task = tasks.value.find(t => t.id === taskId);
-        if (!task) {
-          console.log(`[WS] handleRemoteUpdate: taskId=${taskId?.substring(0,8)} 未找到，请求全量同步`);
-          sendMessage({ type: 'requestSync', clientId });
-          return;
-        }
-        const bug = task.bugs.find(b => b.id === bugId);
-        if (!bug) {
-          console.log(`[WS] handleRemoteUpdate: bugId=${bugId} 在 taskId=${taskId?.substring(0,8)} 中未找到，请求全量同步`);
-          sendMessage({ type: 'requestSync', clientId });
-          return;
-        }
+        const loc = locateBug(taskId, bugId, 'handleRemoteUpdate');
+        if (!loc) return;
+        const bug = loc.bug;
 
         // 第三层防护：新旧值相同时跳过
         if (bug[field] === value && completedAt === undefined && statusChangedAt === undefined && archivedAt === undefined) {
@@ -1274,18 +1244,9 @@
        * 处理远程新增图片（追加到 bug.images）
        */
       function handleRemoteAddImage(taskId, bugId, filename) {
-        const task = tasks.value.find(t => t.id === taskId);
-        if (!task) {
-          console.log(`[WS] handleRemoteAddImage: taskId=${taskId?.substring(0,8)} 未找到，请求全量同步`);
-          sendMessage({ type: 'requestSync', clientId });
-          return;
-        }
-        const bug = task.bugs.find(b => b.id === bugId);
-        if (!bug) {
-          console.log(`[WS] handleRemoteAddImage: bugId=${bugId} 在 taskId=${taskId?.substring(0,8)} 中未找到，请求全量同步`);
-          sendMessage({ type: 'requestSync', clientId });
-          return;
-        }
+        const loc = locateBug(taskId, bugId, 'handleRemoteAddImage');
+        if (!loc) return;
+        const bug = loc.bug;
         if (!Array.isArray(bug.images)) bug.images = [];
         if (!bug.images.includes(filename)) bug.images.push(filename);
       }
@@ -1294,18 +1255,9 @@
        * 处理远程移除单张图片
        */
       function handleRemoteRemoveImage(taskId, bugId, filename) {
-        const task = tasks.value.find(t => t.id === taskId);
-        if (!task) {
-          console.log(`[WS] handleRemoteRemoveImage: taskId=${taskId?.substring(0,8)} 未找到，请求全量同步`);
-          sendMessage({ type: 'requestSync', clientId });
-          return;
-        }
-        const bug = task.bugs.find(b => b.id === bugId);
-        if (!bug) {
-          console.log(`[WS] handleRemoteRemoveImage: bugId=${bugId} 在 taskId=${taskId?.substring(0,8)} 中未找到，请求全量同步`);
-          sendMessage({ type: 'requestSync', clientId });
-          return;
-        }
+        const loc = locateBug(taskId, bugId, 'handleRemoteRemoveImage');
+        if (!loc) return;
+        const bug = loc.bug;
         if (Array.isArray(bug.images)) {
           const i = bug.images.indexOf(filename);
           if (i !== -1) bug.images.splice(i, 1);
@@ -1345,12 +1297,8 @@
       // ==================== 远程备注操作 ====================
 
       function handleRemoteAddNote(change) {
-        const task = tasks.value.find(t => t.id === change.taskId);
-        if (!task) {
-          console.log(`[WS] handleRemoteAddNote: taskId=${change.taskId?.substring(0, 8)} 未找到，请求全量同步`);
-          sendMessage({ type: 'requestSync', clientId });
-          return;
-        }
+        const task = locateTask(change.taskId, 'handleRemoteAddNote');
+        if (!task) return;
         if (!task.notes) task.notes = [];
         if (!task.notes.some(n => n.id === change.note.id)) {
           task.notes.push({ ...change.note });
@@ -1382,18 +1330,9 @@
       // ==================== 远程 任务备注操作 ====================
 
       function handleRemoteAddBugNote(change) {
-        const task = tasks.value.find(t => t.id === change.taskId);
-        if (!task) {
-          console.log(`[WS] handleRemoteAddBugNote: taskId=${change.taskId?.substring(0, 8)} 未找到，请求全量同步`);
-          sendMessage({ type: 'requestSync', clientId });
-          return;
-        }
-        const bug = task.bugs.find(b => b.id === change.bugId);
-        if (!bug) {
-          console.log(`[WS] handleRemoteAddBugNote: bugId=${change.bugId} 未找到，请求全量同步`);
-          sendMessage({ type: 'requestSync', clientId });
-          return;
-        }
+        const loc = locateBug(change.taskId, change.bugId, 'handleRemoteAddBugNote');
+        if (!loc) return;
+        const bug = loc.bug;
         if (!bug.notes) bug.notes = [];
         if (!bug.notes.some(n => n.id === change.note.id)) {
           bug.notes.push({ ...change.note });
@@ -1692,7 +1631,7 @@
        */
       function triggerStatusIconAnim(bug) {
         nextTick(() => {
-          const rowEl = document.querySelector('.bug-row[data-bug-id="' + bug.id + '"]');
+          const rowEl = rowElementOf(bug.id);
           if (!rowEl) return;
           const icon = rowEl.querySelector('.status-sel-icon');
           if (!icon) return;
@@ -1738,7 +1677,7 @@
         maybeLateNightCheer(bug.status, newStatus); // 深夜彩蛋（只在自己操作时触发，随广播不重复弹）
 
         // 筛选视图：飞向目标 tag
-        const rowEl = document.querySelector('.bug-row[data-bug-id="' + bug.id + '"]');
+        const rowEl = rowElementOf(bug.id);
         if (statusFilter.value !== '全部' && rowEl) {
           flyRowToTag(bug, rowEl, newStatus);
           triggerStatusIconAnim(bug);
@@ -1846,11 +1785,7 @@
         setTimeout(() => { enteringBugId.value = null; }, 320);
 
         // 新增任务按钮"垒上"动画（land 仅由 JS 控制；限定卡片列表头按钮，避免误中标签栏"新增项目"）
-        const addBtn = document.querySelector('.bug-panel .btn-add-task');
-        if (addBtn) {
-          addBtn.classList.add('land');
-          setTimeout(() => addBtn.classList.remove('land'), 360);
-        }
+        pulse(document.querySelector('.bug-panel .btn-add-task'), 'land', 360);
 
         // 自动进入编辑模式
         nextTick(() => {
@@ -1931,16 +1866,6 @@
       }
 
       /**
-       * 格式化 deadline 时间戳 → "YYYY-MM-DD HH:mm"（备注文案用）
-       */
-      function formatDeadline(ts) {
-        if (typeof ts !== 'number') return '';
-        const d = new Date(ts);
-        const p = (n) => String(n).padStart(2, '0');
-        return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
-      }
-
-      /**
        * 面板"确定"：按勾选落库
        * - deadline 勾选且已选时间 → bug.deadline 结构化字段（update 广播，未来逾期/排序可用）+ 自动代发一条备注
        * - 备注勾选且有内容 → 发一条备注
@@ -1949,28 +1874,12 @@
         if (nsDeadlineOn.value && typeof nsDeadline.value === 'number') {
           bug.deadline = nsDeadline.value;
           sendUpdate(bug.id, 'deadline', nsDeadline.value);
-          pushBugNote(bug, '该任务启用 deadline：' + formatDeadline(nsDeadline.value));
+          pushBugNote(bug, '该任务启用 deadline：' + formatTime(nsDeadline.value));
         }
         if (nsNoteOn.value && nsNoteText.value.trim()) {
           pushBugNote(bug, nsNoteText.value.trim());
         }
         closeNextStep();
-      }
-
-      /**
-       * 删除任务
-       */
-      function deleteBug(bug) {
-        const task = currentTask.value;
-        if (!task) return;
-
-        const index = task.bugs.findIndex((b) => b.id === bug.id);
-        if (index !== -1) {
-          task.bugs.splice(index, 1);
-        }
-
-        // 图片文件由服务端 handleDelete 在数据写盘成功后统一清理
-        sendDelete(bug.id);
       }
 
       // ==================== 删除全链路（按住蓄怒 → 松手确认 → 渐隐黑幕 → 覆盖删除） ====================
@@ -2005,9 +1914,7 @@
           inside = e.clientX >= delPressRect.left - 3 && e.clientX <= delPressRect.right + 3 && e.clientY >= delPressRect.top - 3 && e.clientY <= delPressRect.bottom + 3;
         }
         if (!inside) return; // 删除终止（扳机保险）
-        const btn = e.currentTarget;
-        btn.classList.add('burst');
-        setTimeout(() => btn.classList.remove('burst'), 440);
+        pulse(e.currentTarget, 'burst', 440);
         confirmBugId.value = bug.id; // 渐隐黑幕 + 行聚光
       }
 
@@ -2277,11 +2184,11 @@
       // ==================== 备注操作 ====================
 
       /**
-       * 计算某任务有多少个不同的人写过备注
+       * 计算有多少个不同的人写过备注（任务级/条目级共用，传入带 notes 数组的对象）
        */
-      function getNoteWriters(task) {
-        if (!task || !task.notes || task.notes.length === 0) return 0;
-        return new Set(task.notes.map(n => n.clientId)).size;
+      function noteWriters(item) {
+        if (!item || !item.notes || item.notes.length === 0) return 0;
+        return new Set(item.notes.map(n => n.clientId)).size;
       }
 
       /**
@@ -2289,11 +2196,7 @@
        */
       function openNotesDialog(task, evt) {
         // 任务标签栏备注按钮"便签翘角"动画：用事件源精确定位被点击标签的按钮（peel 仅由 JS 控制，300ms 后移除）
-        const el = evt && evt.currentTarget;
-        if (el) {
-          el.classList.add('peel');
-          setTimeout(() => el.classList.remove('peel'), 300);
-        }
+        pulse(evt && evt.currentTarget, 'peel', 300);
         notesDialogTaskId.value = task.id;
         notesDialogVisible.value = true;
       }
@@ -2596,18 +2499,9 @@
         return task?.bugs?.find(b => b.id === bugNotesBugId.value) || null;
       });
 
-      function getBugNoteWriters(bug) {
-        if (!bug || !bug.notes || bug.notes.length === 0) return 0;
-        return new Set(bug.notes.map(n => n.clientId)).size;
-      }
-
       function openBugNotesDialog(taskId, bugId) {
         // 行内备注按钮"便签翘角"动画：按 data-bug-id 精确锁定被点击行的按钮（peel 仅由 JS 控制，300ms 后移除）
-        const noteBtn = document.querySelector('.bug-row[data-bug-id="' + bugId + '"] .btn-note');
-        if (noteBtn) {
-          noteBtn.classList.add('peel');
-          setTimeout(() => noteBtn.classList.remove('peel'), 300);
-        }
+        pulse(rowElementOf(bugId)?.querySelector('.btn-note'), 'peel', 300);
         bugNotesTaskId.value = taskId;
         bugNotesBugId.value = bugId;
         bugNotesVisible.value = true;
@@ -2888,22 +2782,24 @@
         }
       }
 
+      /** 统一时间格式化：'YYYY-MM-DD HH:mm'，sec=true 追加 ':ss' */
+      function fmtStamp(d, sec) {
+        const p = (n) => String(n).padStart(2, '0');
+        return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}` + (sec ? `:${p(d.getSeconds())}` : '');
+      }
+
       /**
        * 格式化时间戳为可读时间
        */
       function formatTime(ts) {
-        if (!ts) return '';
-        const d = new Date(ts);
-        const pad = (n) => String(n).padStart(2, '0');
-        return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+        return ts ? fmtStamp(new Date(ts)) : '';
       }
 
       /**
        * 格式化时间戳，精确到秒（用于 completedAt 等时间锚点字段）
        */
       function formatTimestamp(date) {
-        const pad = (n) => String(n).padStart(2, '0');
-        return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+        return fmtStamp(date, true);
       }
 
       // ==================== 本地备份 ====================
@@ -2918,11 +2814,29 @@
         return backupStatus.value;
       });
 
-      /**
-       * 启动 30s 间隔本地备份（仅 Electron 客户端生效）
-       */
+      /** 把 IP 里的非法目录名字符（: * ? 等）替换为 _ */
       function backupDirName(ip) {
         return ip.replace(/[:*?"<>|]/g, '_');
+      }
+
+      /** 写一次本地备份（30s 定时器与连接建立/断开等关键时刻共用）：深拷贝数据 → writeBackup → 更新计数/状态 */
+      function writeBackupOnce() {
+        const ip = serverHost.value;
+        if (!ip || !tasks.value.length) return;
+        const clean = structuredClone({ version: dataVersion.value, tasks: tasks.value });
+        window.electronAPI.writeBackup(ip, clean).then((res) => {
+          backupCount++;
+          if (res && res.ok) {
+            backupStatus.value = 'ok';
+            console.log(`[Backup] #${backupCount} 备份成功 → D:\\Bug清单\\pc\\${backupDirName(ip)}\\data.json (tasks: ${clean.tasks.length})`);
+          } else {
+            backupStatus.value = 'fail';
+            console.warn('[Backup] 写入失败:', res?.error || '未知错误');
+          }
+        }).catch((err) => {
+          backupStatus.value = 'fail';
+          console.error('[Backup] 异常:', err.message);
+        });
       }
 
       /**
@@ -2941,24 +2855,7 @@
         }
 
         backupStatus.value = 'waiting';
-        backupTimer = setInterval(() => {
-          const ip = serverHost.value;
-          if (!ip || !tasks.value.length) return;
-          const clean = JSON.parse(JSON.stringify({ version: dataVersion.value, tasks: tasks.value }));
-          window.electronAPI.writeBackup(ip, clean).then((res) => {
-            backupCount++;
-            if (res && res.ok) {
-              backupStatus.value = 'ok';
-              console.log(`[Backup] #${backupCount} 备份成功 → D:\\Bug清单\\pc\\${backupDirName(ip)}\\data.json (tasks: ${clean.tasks.length})`);
-            } else {
-              backupStatus.value = 'fail';
-              console.warn('[Backup] 写入失败:', res?.error || '未知错误');
-            }
-          }).catch((err) => {
-            backupStatus.value = 'fail';
-            console.error('[Backup] 异常:', err.message);
-          });
-        }, 30000);
+        backupTimer = setInterval(writeBackupOnce, 30000);
       }
 
       /**
@@ -2970,25 +2867,7 @@
           backupStatus.value = 'no-api';
           return;
         }
-        const ip = serverHost.value;
-        if (!ip || !tasks.value.length) {
-          console.log(`[Backup] 立即备份跳过: ip=${ip}, tasks=${tasks.value.length}`);
-          return;
-        }
-        const clean = JSON.parse(JSON.stringify({ version: dataVersion.value, tasks: tasks.value }));
-        window.electronAPI.writeBackup(ip, clean).then((res) => {
-          if (res && res.ok) {
-            backupCount = 1;
-            backupStatus.value = 'ok';
-            console.log(`[Backup] 首次备份成功 → D:\\Bug清单\\pc\\${backupDirName(ip)}\\data.json (tasks: ${clean.tasks.length})`);
-          } else {
-            backupStatus.value = 'fail';
-            console.warn('[Backup] 首次备份失败:', res?.error || '未知错误');
-          }
-        }).catch((err) => {
-          backupStatus.value = 'fail';
-          console.error('[Backup] 异常:', err.message);
-        });
+        writeBackupOnce();
       }
 
       // ==================== 工具函数 ====================
@@ -3023,8 +2902,6 @@
           return;
         }
 
-        uploadingBugId.value = bugId;
-
         try {
           const formData = new FormData();
           formData.append('file', file);
@@ -3057,11 +2934,9 @@
           // 发射动画：仅目标行的上传按钮播放"托举发射"（launch 仅由 JS 控制，360ms 后移除）
           // 先等 v-if/v-else 重渲染（首次上传时 shot-add 会替换为 shot-add-more），再锁定重渲染后的元素
           await nextTick();
-          const rowEl = document.querySelector('.bug-row[data-bug-id="' + bugId + '"]');
+          const rowEl = rowElementOf(bugId);
           if (rowEl) {
-            const btns = rowEl.querySelectorAll('.btn-upload');
-            btns.forEach(b => b.classList.add('launch'));
-            setTimeout(() => btns.forEach(b => b.classList.remove('launch')), 360);
+            rowEl.querySelectorAll('.btn-upload').forEach(b => pulse(b, 'launch', 360));
           }
 
           // 服务端已直接更新 data.json 并广播，客户端不需要再 sendUpdate
@@ -3071,8 +2946,6 @@
         } catch (err) {
           console.error('[Image] 上传失败:', err);
           ElementPlus.ElMessage.error('图片上传失败，请检查网络连接');
-        } finally {
-          uploadingBugId.value = null;
         }
       }
 
@@ -3123,26 +2996,6 @@
             pasteAreaRef.value.focus();
           }
         });
-      }
-
-      /**
-       * 粘贴对话框内捕获 Ctrl+V
-       */
-      function onPasteInDialog(e) {
-        const items = e.clipboardData && e.clipboardData.items;
-        if (!items) return;
-        for (let i = 0; i < items.length; i++) {
-          const item = items[i];
-          if (item.type && item.type.startsWith('image/')) {
-            e.preventDefault();
-            const blob = item.getAsFile();
-            if (blob) {
-              pasteBlob.value = blob;
-              pastePreviewUrl.value = URL.createObjectURL(blob);
-            }
-            return;
-          }
-        }
       }
 
       /**
@@ -3227,19 +3080,24 @@
       }
 
       /**
-       * 全局 Ctrl+V 粘贴：仅粘贴对话框打开时响应
+       * 全局 Ctrl+V 粘贴：仅粘贴对话框打开时响应（对话框内焦点元素的 paste 冒泡到 document）
        */
       function onGlobalPaste(e) {
-        if (pasteDialogVisible.value) {
-          onPasteInDialog(e);
+        if (!pasteDialogVisible.value) return;
+        const items = e.clipboardData && e.clipboardData.items;
+        if (!items) return;
+        for (let i = 0; i < items.length; i++) {
+          const item = items[i];
+          if (item.type && item.type.startsWith('image/')) {
+            e.preventDefault();
+            const blob = item.getAsFile();
+            if (blob) {
+              pasteBlob.value = blob;
+              pastePreviewUrl.value = URL.createObjectURL(blob);
+            }
+            return;
+          }
         }
-      }
-
-      /**
-       * 发送 removeImage 消息（删除单张图片）
-       */
-      function sendRemoveImage(bugId, filename) {
-        sendMessage({ type: 'removeImage', clientId, data: { taskId: currentTaskId.value, bugId, filename } });
       }
 
       /**
@@ -3253,7 +3111,7 @@
         if (i === -1) return; // 已不存在（如双击第二次）：不重复发送、不弹误导性提示
         bug.images.splice(i, 1);
         // 本地移除并通知服务端（服务端 handleRemoveImage 负责删除文件，保证先改数据、后删文件）
-        sendRemoveImage(bug.id, filename);
+        sendMessage({ type: 'removeImage', clientId, data: { taskId: currentTaskId.value, bugId: bug.id, filename } });
         ElementPlus.ElMessage.success('图片已删除');
       }
 
@@ -3267,15 +3125,16 @@
       let pvOriginRect = null, pvTimer = null;
 
       /**
-       * 扑克牌堆卡片定位样式（第 1 张最上层，rotate/left/z 按序错落，最多 6 张全可见）
+       * 扑克牌堆卡片定位样式（第 1 张最上层，rotate/z 按序错落，最多 6 张全可见）
        * @param {number} i 卡片序号（0 起，取前 6 张）
+       * @param {number[]} lefts 该堆的左偏移序列（主牌堆 52px 卡 / 备注 mini 堆 44px 卡）
        */
-      function stackCardStyle(i) {
+      function stackCardStyleAt(i, lefts) {
         const rot = [-5, -1, 3, 7, -2, 5][i] || 0;
-        const left = [2, 14, 26, 38, 50, 62][i] || 0;
         const z = [6, 5, 4, 3, 2, 1][i] || 1;
-        return { left: left + 'px', transform: 'rotate(' + rot + 'deg)', zIndex: z };
+        return { left: (lefts[i] || 0) + 'px', transform: 'rotate(' + rot + 'deg)', zIndex: z };
       }
+      function stackCardStyle(i) { return stackCardStyleAt(i, [2, 14, 26, 38, 50, 62]); }
 
       /**
        * 牌堆容器宽度自适应图片数量（= 最后一张卡片右缘）：图片少时紧凑、右侧无空隙；
@@ -3287,16 +3146,8 @@
         return { width: (52 + 2 + (count - 1) * 12) + 'px' };
       }
 
-      /**
-       * 备注 mini 牌堆卡片定位样式（缩小版：卡片 44×60、偏移 [2,12,24,36,48,60]，最多 6 张）
-       * 第 1 张最上层，点击整堆从第一张进查看器
-       */
-      function noteStackCardStyle(i) {
-        const rot = [-5, -1, 3, 7, -2, 5][i] || 0;
-        const left = [2, 12, 24, 36, 48, 60][i] || 0;
-        const z = [6, 5, 4, 3, 2, 1][i] || 1;
-        return { left: left + 'px', transform: 'rotate(' + rot + 'deg)', zIndex: z };
-      }
+      /** 备注 mini 牌堆卡片定位（缩小版堆：偏移 [2,12,24,36,48,60]，点击整堆从第一张进查看器） */
+      function noteStackCardStyle(i) { return stackCardStyleAt(i, [2, 12, 24, 36, 48, 60]); }
 
       /**
        * 打开大图预览（从点击的牌卡飞入展开；多图：从指定图片开始，支持前后翻页）
@@ -3329,7 +3180,6 @@
         previewImages.value = [...bug.images];
         const idx = filename ? bug.images.indexOf(filename) : 0;
         previewIndex.value = idx === -1 ? 0 : idx;
-        previewImageUrl.value = '//' + serverHost.value + '/uploads/' + encodeURIComponent(previewImages.value[previewIndex.value]);
         const cardEl = evt && evt.currentTarget;
         pvOriginRect = cardEl ? cardEl.getBoundingClientRect() : null;
         const zoom = pvZoom.value;
@@ -3402,7 +3252,6 @@
         if (!Array.isArray(images) || !images.length) return;
         previewImages.value = [...images];
         previewIndex.value = 0;
-        previewImageUrl.value = '//' + serverHost.value + '/uploads/' + encodeURIComponent(images[0]);
         imagePreviewVisible.value = true;
         previewStageReady.value = true;
         preloadPreviewImage(previewImageUrl.value);
@@ -3438,7 +3287,6 @@
         // 尾张 → 第一张；否则 splice 后当前索引即"下一张"
         const newIdx = previewIndex.value >= previewImages.value.length ? 0 : previewIndex.value;
         previewIndex.value = newIdx;
-        previewImageUrl.value = '//' + serverHost.value + '/uploads/' + encodeURIComponent(previewImages.value[newIdx]);
         previewDeleteVisible.value = false;
       }
 
@@ -3457,53 +3305,12 @@
       /**
        * 预览上一张
        */
-      function previewPrev() { if (previewIndex.value > 0) { previewIndex.value--; previewImageUrl.value = '//' + serverHost.value + '/uploads/' + encodeURIComponent(previewImages.value[previewIndex.value]); preloadPreviewImage(previewImageUrl.value); } }
+      function previewPrev() { if (previewIndex.value > 0) { previewIndex.value--; preloadPreviewImage(previewImageUrl.value); } }
 
       /**
        * 预览下一张
        */
-      function previewNext() { if (previewIndex.value < previewImages.value.length - 1) { previewIndex.value++; previewImageUrl.value = '//' + serverHost.value + '/uploads/' + encodeURIComponent(previewImages.value[previewIndex.value]); preloadPreviewImage(previewImageUrl.value); } }
-
-      /**
-       * 整行拖拽（表格级别事件代理）
-       */
-      let tableDragRow = null;
-      function onTableDragOver(e) {
-        e.preventDefault();
-        const row = e.target.closest('tr.el-table__row');
-        if (row) {
-          if (tableDragRow && tableDragRow !== row) {
-            tableDragRow.classList.remove('drag-over-row');
-          }
-          row.classList.add('drag-over-row');
-          tableDragRow = row;
-        }
-      }
-      function onTableDragLeave(e) {
-        const row = e.target.closest('tr.el-table__row');
-        if (row === tableDragRow || !e.relatedTarget || !e.relatedTarget.closest('tr.el-table__row')) {
-          if (tableDragRow) {
-            tableDragRow.classList.remove('drag-over-row');
-          }
-          tableDragRow = null;
-        }
-      }
-      function onTableDrop(e) {
-        e.preventDefault();
-        if (tableDragRow) {
-          tableDragRow.classList.remove('drag-over-row');
-          tableDragRow = null;
-        }
-        const file = e.dataTransfer.files[0];
-        if (!file) return;
-        // 找到目标行对应的 bug ID
-        const row = e.target.closest('tr.el-table__row');
-        if (!row) return;
-        const bugId = row.getAttribute('data-row-key') || row.getAttribute('data-key');
-        if (bugId) {
-          handleImageUpload(file, bugId);
-        }
-      }
+      function previewNext() { if (previewIndex.value < previewImages.value.length - 1) { previewIndex.value++; preloadPreviewImage(previewImageUrl.value); } }
 
       // ==================== 启动模式选择 ====================
 
@@ -3605,12 +3412,7 @@
         // 不再删除 localStorage 中的模式/地址：误点"重新选择启动模式"不应丢配置。
         // 仅在用户确认新模式/新地址时（confirmClientMode / confirmServerMode）才覆盖。
         disconnectReason.value = null; // 重置模式后清掉旧的断线原因文案
-        pendingQueue = []; // 重新选择模式：清空待发队列
-        if (ws) {
-          ws.onclose = null; // 避免触发自动重连逻辑
-          ws.close();
-          ws = null;
-        }
+        disconnect(); // 断连复用 disconnect：清重连定时器 + 待发队列，onclose 已摘除不自动重连
         showStartupDialog.value = true;
         startupMode.value = null;
         startupAddressInput.value = (function () {
@@ -3727,12 +3529,10 @@
         themeMenuY,
         toggleThemeMenu,
         closeThemeMenu,
-        applyTheme,
         applyThemeRebuild,
 
         // 更多菜单（导出 / 导入）
         moreMenuVisible,
-        moreMenuLeaving,
         moreMenuX,
         moreMenuY,
         importFileInput,
@@ -3783,11 +3583,8 @@
         editingBugId,
         editingTaskId,
         editingTaskName,
-        nameInputRef,
         statusFilter,
-        currentImageBugId,
         imagePreviewVisible,
-        previewImageUrl,
         previewImages,
         previewReady,
         previewIndex,
@@ -3795,7 +3592,6 @@
         previewBug,
         previewDeleteVisible,
         pvZoom,
-        uploadingBugId,
         fileInputRef,
 
         // 截图选择气泡
@@ -3808,11 +3604,9 @@
         pasteBlob,
         pastePreviewUrl,
         pasteAreaRef,
-        pasteTargetBugId,
 
         // 任务备注弹窗
         notesDialogVisible,
-        notesDialogTaskId,
         notesDialogTask,
         newNoteContent,
         pendingNoteFiles,
@@ -3822,8 +3616,6 @@
 
         // 任务备注弹窗
         bugNotesVisible,
-        bugNotesTaskId,
-        bugNotesBugId,
         bugNotesTargetBug,
         newBugNoteContent,
         pendingBugNoteFiles,
@@ -3834,7 +3626,6 @@
         // 计算属性
         shortClientId,
         statusText,
-        currentTask,
         filteredAndSortedBugs,
         statusCounts,
 
@@ -3860,7 +3651,6 @@
         nsClosing,
         nsHoursVisible,
         nsHoursClosing,
-        openNextStep,
         closeNextStep,
         confirmNextStep,
         onNextStepAnimEnd,
@@ -3868,9 +3658,7 @@
         applyHoursDays,
         closeHoursPicker,
         onHoursAnimEnd,
-        formatDeadline,
         addBug,
-        deleteBug,
         onDelDown,
         onDelUp,
         cancelDeleteConfirm,
@@ -3892,12 +3680,11 @@
         onTaskDragEnd,
         onTaskDragOver,
         onTaskDragLeave,
-        onTaskDrop,
         onTaskDropAt,
         onTaskDropToEnd,
 
         // 任务备注方法
-        getNoteWriters,
+        getNoteWriters: noteWriters,
         getNoteColor,
         assigneeLabel,
         openNotesDialog,
@@ -3908,58 +3695,43 @@
         isNoteModified,
         onTaskNoteEditKeydown,
         onTaskNoteNewKeydown,
-        addNote,
         addNoteWithImage,
         onChooseNoteImage,
         removePendingNoteFile,
         clearPendingNoteImage,
         pickAttachImage,
-        attachNoteImage,
         updateNoteImage,
-        updateNote,
         deleteNote,
 
         // 任务备注方法
-        getBugNoteWriters,
+        getBugNoteWriters: noteWriters,
         openBugNotesDialog,
         editingBugNoteId,
         startEditBugNote,
         confirmEditBugNote,
         cancelEditBugNote,
-        addBugNote,
         addBugNoteWithImage,
         onChooseBugNoteImage,
         removePendingBugNoteFile,
         clearPendingBugNoteImage,
         pickAttachBugImage,
-        attachBugNoteImage,
         updateBugNoteImage,
-        updateBugNote,
         deleteBugNote,
         onBugNoteEditKeydown,
         onBugNoteNewKeydown,
         formatTime,
 
         // 图片方法
-        handleImageUpload,
         triggerImageMenu,
         onChooseUpload,
         onChoosePaste,
         focusPasteArea,
-        onPasteInDialog,
         confirmPaste,
         closePasteDialog,
         onFileSelect,
         onDragOver,
         onDragLeave,
         onDrop,
-        onGlobalPaste,
-        onGlobalKeydown,
-        onTableDragOver,
-        onTableDragLeave,
-        onTableDrop,
-        deleteImage,
-        sendRemoveImage,
         openPreview,
         openNoteImagePreview,
         askPreviewDelete,

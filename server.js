@@ -19,10 +19,6 @@ const { version: APP_VERSION } = require('./package.json');
 // 状态枚举（与前端 statusOptions 保持一致，服务端仅接受这三个值）
 const ALLOWED_STATUSES = ['待修复', '修复中', '已完成'];
 
-// 打包后 (asar) __dirname 指向只读归档，数据文件放到 exe 旁边
-// 便携版通过 PORTABLE_EXECUTABLE_FILE 获取原始 exe 路径
-const isPackaged = __dirname.endsWith('.asar');
-
 // 数据目录：优先环境变量，否则 D:\Bug清单\[用户名]\
 const username = (() => {
   try { return os.userInfo().username; } catch (_) { return 'default'; }
@@ -30,7 +26,7 @@ const username = (() => {
 const DATA_ROOT = process.env.BUGLIST_DATA_ROOT || path.join('D:\\Bug清单', username);
 const DATA_FILE = path.join(DATA_ROOT, 'data.json');
 const TMP_FILE = path.join(DATA_ROOT, '.data.tmp');
-const PUBLIC_DIR = isPackaged ? path.join(__dirname, 'public') : path.join(__dirname, 'public');
+const PUBLIC_DIR = path.join(__dirname, 'public');
 const UPLOADS_DIR = path.join(DATA_ROOT, 'uploads');
 
 // 启动时自动创建 data 及 uploads 目录
@@ -259,43 +255,38 @@ const BACKUP_KEEP = 20;
 const PRE_DELETE_KEEP = 5;
 let lastDataBackup = 0;
 
+/** 轮转备份 data.json → backups/<prefix>-<stamp>.json，保留同前缀最近 keep 份（按文件名排序）；返回备份路径，失败/无数据文件返回 null */
+function rotateBackup(prefix, stamp, keep) {
+  try {
+    if (!fs.existsSync(DATA_FILE)) return null;
+    if (!fs.existsSync(BACKUP_DIR)) fs.mkdirSync(BACKUP_DIR, { recursive: true });
+    const dest = path.join(BACKUP_DIR, `${prefix}-${stamp}.json`);
+    fs.copyFileSync(DATA_FILE, dest);
+    const files = fs.readdirSync(BACKUP_DIR).filter(f => f.startsWith(prefix + '-')).sort();
+    while (files.length > keep) {
+      fs.unlinkSync(path.join(BACKUP_DIR, files.shift()));
+    }
+    return dest;
+  } catch (e) {
+    return { error: e };
+  }
+}
+
 /** 轮转备份 data.json → backups/data-<时间戳>.json（1 分钟节流，保留最近 BACKUP_KEEP 份） */
 function backupDataFile() {
   const now = Date.now();
   if (now - lastDataBackup < 60000) return; // 节流：频繁写盘（如连续传图）不重复备份
   lastDataBackup = now;
-  try {
-    if (!fs.existsSync(DATA_FILE)) return;
-    if (!fs.existsSync(BACKUP_DIR)) fs.mkdirSync(BACKUP_DIR, { recursive: true });
-    const stamp = formatTimestamp(new Date()).replace(/[: ]/g, '-');
-    const dest = path.join(BACKUP_DIR, 'data-' + stamp + '.json');
-    fs.copyFileSync(DATA_FILE, dest);
-    // 轮转：只保留最近 BACKUP_KEEP 份
-    const files = fs.readdirSync(BACKUP_DIR).filter(f => f.startsWith('data-')).sort();
-    while (files.length > BACKUP_KEEP) {
-      fs.unlinkSync(path.join(BACKUP_DIR, files.shift()));
-    }
-    console.log(`[Backup] data.json 已备份（${BACKUP_DIR} 保留 ${BACKUP_KEEP} 份）`);
-  } catch (e) {
-    console.error('[Backup] 轮转备份失败:', e.message);
-  }
+  const result = rotateBackup('data', formatTimestamp(new Date()).replace(/[: ]/g, '-'), BACKUP_KEEP);
+  if (result && result.error) console.error('[Backup] 轮转备份失败:', result.error.message);
+  else if (result) console.log(`[Backup] data.json 已备份（${BACKUP_DIR} 保留 ${BACKUP_KEEP} 份）`);
 }
 
 /** 删除类操作前的即时快照（不节流，保证删除前一刻的数据可回滚，保留最近 PRE_DELETE_KEEP 份） */
 function snapshotBeforeDelete() {
-  try {
-    if (!fs.existsSync(DATA_FILE)) return;
-    if (!fs.existsSync(BACKUP_DIR)) fs.mkdirSync(BACKUP_DIR, { recursive: true });
-    const dest = path.join(BACKUP_DIR, 'pre-delete-' + Date.now() + '.json');
-    fs.copyFileSync(DATA_FILE, dest);
-    const files = fs.readdirSync(BACKUP_DIR).filter(f => f.startsWith('pre-delete-')).sort();
-    while (files.length > PRE_DELETE_KEEP) {
-      fs.unlinkSync(path.join(BACKUP_DIR, files.shift()));
-    }
-    console.log(`[Backup] 删除前快照: ${path.basename(dest)}`);
-  } catch (e) {
-    console.error('[Backup] 删除前快照失败:', e.message);
-  }
+  const result = rotateBackup('pre-delete', String(Date.now()), PRE_DELETE_KEEP);
+  if (result && result.error) console.error('[Backup] 删除前快照失败:', result.error.message);
+  else if (result) console.log(`[Backup] 删除前快照: ${path.basename(result)}`);
 }
 function getLocalIPs() {
   const interfaces = os.networkInterfaces();
@@ -325,12 +316,43 @@ function sendTo(ws, message) {
   }
 }
 
-function broadcastClientCount(_wss) {
+function countOpenClients(_wss) {
   let count = 0;
   _wss.clients.forEach((client) => {
     if (client.readyState === 1) count++;
   });
-  broadcast(_wss, { type: 'clientCount', count });
+  return count;
+}
+
+function broadcastClientCount(_wss) {
+  broadcast(_wss, { type: 'clientCount', count: countOpenClients(_wss) });
+}
+
+/** 向单个客户端发送全量同步（新连接 / requestSync 共用） */
+function sendFullSync(ws) {
+  const data = readData();
+  sendTo(ws, { type: 'fullSync', data, version: data.version });
+}
+
+/** 写盘成功后广播变更（change 为 null 则不广播）——所有 handle* 与上传/删除端点共用 */
+function broadcastChange(_wss, originClientId, result) {
+  if (!result || !result.change) return;
+  broadcast(_wss, {
+    type: 'broadcast',
+    originClientId,
+    change: result.change,
+    version: result.version,
+  });
+}
+
+/** 清理 uploads 图片文件（best-effort，ENOENT 容忍——文件可能已被删） */
+function deleteImageFile(f) {
+  try {
+    fs.unlinkSync(path.join(UPLOADS_DIR, f));
+    console.log(`[Image] 已清理图片: ${f}`);
+  } catch (e) {
+    if (e.code !== 'ENOENT') console.error(`[Image] 清理图片失败: ${f}`, e.message);
+  }
 }
 
 // ================================================================
@@ -408,14 +430,7 @@ async function handleUpdate(ws, msg, _wss) {
     return { type: 'update', taskId, bugId, field, value, completedAt, archivedAt, statusChangedAt: bug.statusChangedAt };
   });
 
-  if (result.change) {
-    broadcast(_wss, {
-      type: 'broadcast',
-      originClientId: msg.clientId,
-      change: result.change,
-      version: result.version,
-    });
-  }
+  broadcastChange(_wss, msg.clientId, result);
 }
 
 async function handleRemoveImage(ws, msg, _wss) {
@@ -431,11 +446,39 @@ async function handleRemoveImage(ws, msg, _wss) {
     removed = filename;
     return { type: 'removeImage', taskId, bugId, filename };
   });
-  if (result.change) {
-    broadcast(_wss, { type: 'broadcast', originClientId: msg.clientId, change: result.change, version: result.version });
-    try { fs.unlinkSync(path.join(UPLOADS_DIR, removed)); console.log(`[Image] 已清理图片: ${removed}`); }
-    catch (e) { if (e.code !== 'ENOENT') console.error(`[Image] 清理图片失败: ${removed}`, e.message); }
+  broadcastChange(_wss, msg.clientId, result);
+  if (result.change) deleteImageFile(removed);
+}
+
+/**
+ * assignee / deadline / archived 显式归一化（handleAdd 与导入共用，同一规则）：
+ * 合法值写入规范形态，非法值显式 delete——`{ ...bug }` 展开会原样带进脏值，杜绝其入库。
+ * 注：deadline（0.3 体验小点）仅保留合法时间戳 number，null/字符串一律删除；
+ * archived（归档体系）仅当 status 已完成时保留布尔标记与数字时间（spec 第 7 节）。
+ */
+function normalizeBugTrustFields(target, src) {
+  if (src.assignee && typeof src.assignee === 'object' && typeof src.assignee.clientId === 'string' && src.assignee.clientId) {
+    target.assignee = { clientId: src.assignee.clientId, name: typeof src.assignee.name === 'string' ? src.assignee.name : null };
+  } else {
+    delete target.assignee;
   }
+  if (typeof src.deadline === 'number' && Number.isFinite(src.deadline)) {
+    target.deadline = src.deadline;
+  } else {
+    delete target.deadline;
+  }
+  if (src.archived === true && src.status === '已完成') {
+    target.archived = true;
+    if (typeof src.archivedAt === 'number' && Number.isFinite(src.archivedAt)) {
+      target.archivedAt = src.archivedAt;
+    } else {
+      delete target.archivedAt;
+    }
+  } else {
+    delete target.archived;
+    delete target.archivedAt;
+  }
+  return target;
 }
 
 async function handleAdd(ws, msg, _wss) {
@@ -450,41 +493,13 @@ async function handleAdd(ws, msg, _wss) {
     // 归一化：确保 images 字段为数组（旧客户端 add 不带 images）；statusChangedAt 缺省为当前时间
     const normalizedBug = { ...bug, images: Array.isArray(bug.images) ? bug.images : [] };
     if (typeof normalizedBug.statusChangedAt !== 'number') normalizedBug.statusChangedAt = Date.now();
-    // assignee 归一化（0.3 负责人）：只接受 { clientId: string, name: string|null }，非法值（含非对象）显式删除，杜绝脏数据入库
-    if (bug.assignee && typeof bug.assignee === 'object' && typeof bug.assignee.clientId === 'string' && bug.assignee.clientId) {
-      normalizedBug.assignee = { clientId: bug.assignee.clientId, name: typeof bug.assignee.name === 'string' ? bug.assignee.name : null };
-    } else {
-      delete normalizedBug.assignee;
-    }
-    // deadline 归一化（0.3 体验小点）：仅保留合法时间戳 number（毫秒），其余（含 null/字符串）显式删除
-    if (!(typeof bug.deadline === 'number' && Number.isFinite(bug.deadline))) {
-      delete normalizedBug.deadline;
-    }
-    // archived（归档体系，0903）：仅当 status 已完成时保留布尔标记与数字时间，非法一律 delete（与 normalizeBugForImport 同规则）
-    // 注：{ ...bug } 展开会原样带进 archived:1 / 待修复却 archived:true 等脏值，必须在此显式覆盖或删除
-    if (bug.archived === true && bug.status === '已完成') {
-      normalizedBug.archived = true;
-      if (typeof bug.archivedAt === 'number' && Number.isFinite(bug.archivedAt)) {
-        normalizedBug.archivedAt = bug.archivedAt;
-      } else {
-        delete normalizedBug.archivedAt;
-      }
-    } else {
-      delete normalizedBug.archived;
-      delete normalizedBug.archivedAt;
-    }
+    // assignee（0.3 负责人）/ deadline / archived：与 normalizeBugForImport 共用同一归一化（非法值显式删除）
+    normalizeBugTrustFields(normalizedBug, bug);
     task.bugs.push(normalizedBug);
     return { type: 'add', taskId, bug: { ...normalizedBug } };
   });
 
-  if (result.change) {
-    broadcast(_wss, {
-      type: 'broadcast',
-      originClientId: msg.clientId,
-      change: result.change,
-      version: result.version,
-    });
-  }
+  broadcastChange(_wss, msg.clientId, result);
 }
 
 async function handleDelete(ws, msg, _wss) {
@@ -515,25 +530,9 @@ async function handleDelete(ws, msg, _wss) {
     return { type: 'delete', taskId, bugId };
   });
 
-  if (result.change) {
-    broadcast(_wss, {
-      type: 'broadcast',
-      originClientId: msg.clientId,
-      change: result.change,
-      version: result.version,
-    });
-
-    // 数据写盘成功后再清理图片文件（best-effort，ENOENT 容忍）
-    deletedImages.forEach(filename => {
-      const imgPath = path.join(UPLOADS_DIR, filename);
-      try {
-        fs.unlinkSync(imgPath);
-        console.log(`[Delete] 已清理图片: ${filename}`);
-      } catch (e) {
-        if (e.code !== 'ENOENT') console.error(`[Delete] 清理图片失败: ${filename}`, e.message);
-      }
-    });
-  }
+  broadcastChange(_wss, msg.clientId, result);
+  // 数据写盘成功后再清理图片文件（best-effort，ENOENT 容忍）
+  if (result.change) deletedImages.forEach(deleteImageFile);
 }
 
 // ================================================================
@@ -550,14 +549,7 @@ async function handleCreateTask(ws, msg, _wss) {
     return { type: 'createTask', task: { id: task.id, name: task.name || '新项目' } };
   });
 
-  if (result.change) {
-    broadcast(_wss, {
-      type: 'broadcast',
-      originClientId: msg.clientId,
-      change: result.change,
-      version: result.version,
-    });
-  }
+  broadcastChange(_wss, msg.clientId, result);
 }
 
 async function handleUpdateTask(ws, msg, _wss) {
@@ -575,14 +567,7 @@ async function handleUpdateTask(ws, msg, _wss) {
     return { type: 'updateTask', taskId, field, value };
   });
 
-  if (result.change) {
-    broadcast(_wss, {
-      type: 'broadcast',
-      originClientId: msg.clientId,
-      change: result.change,
-      version: result.version,
-    });
-  }
+  broadcastChange(_wss, msg.clientId, result);
 }
 
 async function handleDeleteTask(ws, msg, _wss) {
@@ -610,170 +595,17 @@ async function handleDeleteTask(ws, msg, _wss) {
     return { type: 'deleteTask', taskId };
   });
 
-  if (result.change) {
-    broadcast(_wss, {
-      type: 'broadcast',
-      originClientId: msg.clientId,
-      change: result.change,
-      version: result.version,
-    });
-
-    // 数据写盘成功后再逐个清理图片文件（best-effort，ENOENT 容忍）
-    deletedImages.forEach(filename => {
-      const imgPath = path.join(UPLOADS_DIR, filename);
-      try {
-        fs.unlinkSync(imgPath);
-        console.log(`[Task] 已清理图片: ${filename}`);
-      } catch (e) {
-        if (e.code !== 'ENOENT') console.error(`[Task] 清理图片失败: ${filename}`, e.message);
-      }
-    });
-  }
+  broadcastChange(_wss, msg.clientId, result);
+  // 数据写盘成功后再逐个清理图片文件（best-effort，ENOENT 容忍）
+  if (result.change) deletedImages.forEach(deleteImageFile);
 }
 
 // ================================================================
-// 5.2 备注（note）操作 — 任务级
+// 5.2 备注（note）操作 — 任务级与条目级合并（按 data.bugId 有无区分层级；
+//     change.type 仍分别为 addNote/addBugNote 等，WS 协议形态不变）
 // ================================================================
 
-async function handleAddNote(ws, msg, _wss) {
-  const { taskId, note } = msg.data || {};
-  if (!taskId || !note || !note.id) return;
-
-  const result = await updateData((data) => {
-    const task = data.tasks.find(t => t.id === taskId);
-    if (!task) return null;
-    if (!task.notes) task.notes = [];
-    if (task.notes.some(n => n.id === note.id)) return null;
-    // 创建时间锚点（"已修改"判断）：旧客户端不带 createdAt 时补默认值
-    const normalized = { ...note };
-    if (typeof normalized.createdAt !== 'number') normalized.createdAt = normalized.updatedAt || Date.now();
-    task.notes.push(normalized);
-    return { type: 'addNote', taskId, note: { ...normalized } };
-  });
-
-  if (result.change) {
-    broadcast(_wss, {
-      type: 'broadcast',
-      originClientId: msg.clientId,
-      change: result.change,
-      version: result.version,
-    });
-  }
-}
-
-async function handleUpdateNote(ws, msg, _wss) {
-  const { taskId, noteId, content, updatedAt } = msg.data || {};
-  const imageValue = msg.data && msg.data.image;
-  const removeImage = msg.data && msg.data.removeImage;
-  if (!taskId || !noteId) return;
-  // 纯图片移除（removeImage 按文件名，或旧语义 image:null）也合法；content 与移除参数均缺省时拒绝
-  if (content === undefined && removeImage === undefined && imageValue !== null) return;
-
-  let removedNoteImage = null;
-  const removedNoteImages = []; // 闭包（函数顶部 let 声明）：广播后统一清理被移除的图片文件
-  const result = await updateData((data) => {
-    const task = data.tasks.find(t => t.id === taskId);
-    if (!task || !task.notes) return null;
-    const note = task.notes.find(n => n.id === noteId);
-    if (!note) return null;
-    // 更新权限：仅作者本人可修改（含移除图片）
-    if (note.clientId !== msg.clientId) return null;
-    // 变更判定：content 更新 / removeImage 命中 / 旧语义 image:null 命中，任一才算有变更；
-    // 全部未命中（如 removeImage 不在 images 中）→ return null，避免无效广播与版本递增
-    let changed = false;
-    if (content !== undefined) {
-      note.content = content;
-      note.updatedAt = updatedAt || Date.now();
-      changed = true;
-    }
-    // 旧语义：image:null 移除单图（兼容旧客户端）
-    if (imageValue === null && typeof note.image === 'string') {
-      removedNoteImage = note.image;
-      note.image = null;
-      changed = true;
-    }
-    // 新语义：removeImage 按文件名从多图数组中移除
-    if (typeof removeImage === 'string' && Array.isArray(note.images)) {
-      const ri = note.images.indexOf(removeImage);
-      if (ri !== -1) { note.images.splice(ri, 1); removedNoteImages.push(removeImage); changed = true; }
-    }
-    if (!changed) return null;
-    return { type: 'updateNote', taskId, noteId, content: note.content, updatedAt: note.updatedAt, images: [...(note.images || [])] };
-  });
-
-  if (result.change) {
-    broadcast(_wss, {
-      type: 'broadcast',
-      originClientId: msg.clientId,
-      change: result.change,
-      version: result.version,
-    });
-
-    // 数据写盘成功并广播后，再清理被移除的图片文件（best-effort，ENOENT 容忍）
-    if (removedNoteImage) {
-      try {
-        fs.unlinkSync(path.join(UPLOADS_DIR, removedNoteImage));
-        console.log(`[Note] 已清理备注图片: ${removedNoteImage}`);
-      } catch (e) {
-        if (e.code !== 'ENOENT') console.error(`[Note] 清理备注图片失败: ${removedNoteImage}`, e.message);
-      }
-    }
-    removedNoteImages.forEach(f => {
-      try {
-        fs.unlinkSync(path.join(UPLOADS_DIR, f));
-        console.log('[Note] 已清理备注图片: ' + f);
-      } catch (e) {
-        if (e.code !== 'ENOENT') console.error('[Note] 清理备注图片失败:', f, e.message);
-      }
-    });
-  }
-}
-
-async function handleDeleteNote(ws, msg, _wss) {
-  const { taskId, noteId } = msg.data || {};
-  if (!taskId || !noteId) return;
-
-  snapshotBeforeDelete(); // 删除前快照：可回滚
-  let deletedNoteImages = [];
-  const result = await updateData((data) => {
-    const task = data.tasks.find(t => t.id === taskId);
-    if (!task || !task.notes) return null;
-    const note = task.notes.find(n => n.id === noteId);
-    if (!note) return null;
-    // 删除权限与更新一致：仅作者本人可删除
-    if (note.clientId !== msg.clientId) return null;
-    const index = task.notes.findIndex(n => n.id === noteId);
-    if (index === -1) return null;
-    // splice 前记录备注图片（多图），供删除后清理文件
-    deletedNoteImages = [...(note.images || [])];
-    task.notes.splice(index, 1);
-    return { type: 'deleteNote', taskId, noteId };
-  });
-
-  if (result.change) {
-    broadcast(_wss, {
-      type: 'broadcast',
-      originClientId: msg.clientId,
-      change: result.change,
-      version: result.version,
-    });
-
-    // 数据写盘成功并广播后，再清理备注图片文件（best-effort，ENOENT 容忍）
-    deletedNoteImages.forEach(filename => {
-      try {
-        fs.unlinkSync(path.join(UPLOADS_DIR, filename));
-        console.log(`[Note] 已清理备注图片: ${filename}`);
-      } catch (e) {
-        if (e.code !== 'ENOENT') console.error(`[Note] 清理备注图片失败: ${filename}`, e.message);
-      }
-    });
-  }
-}
-
-// ================================================================
-// 5.3 备注（note）操作 — Bug 级
-// ================================================================
-
+/** 辅助：根据 taskId/bugId/noteId 逐级查找 task → bug → note */
 function findBugAndNote(tasks, taskId, bugId, noteId) {
   const task = tasks.find(t => t.id === taskId);
   if (!task) return { task: null, bug: null, note: null };
@@ -784,47 +616,51 @@ function findBugAndNote(tasks, taskId, bugId, noteId) {
   return { task, bug, note };
 }
 
-async function handleAddBugNote(ws, msg, _wss) {
+/** 找到备注所在数组：有 bugId → 条目级 bug.notes；无 → 任务级 task.notes；宿主不存在返回 null */
+function findNoteList(tasks, taskId, bugId) {
+  if (bugId) {
+    const { bug } = findBugAndNote(tasks, taskId, bugId);
+    return bug ? bug.notes : null;
+  }
+  const task = tasks.find(t => t.id === taskId);
+  if (!task) return null;
+  if (!Array.isArray(task.notes)) task.notes = [];
+  return task.notes;
+}
+
+async function handleAddNote(ws, msg, _wss) {
   const { taskId, bugId, note } = msg.data || {};
-  if (!taskId || !bugId || !note || !note.id) return;
+  if (!taskId || !note || !note.id) return;
 
   const result = await updateData((data) => {
-    const { bug } = findBugAndNote(data.tasks, taskId, bugId);
-    if (!bug) return null;
-    if (bug.notes.some(n => n.id === note.id)) return null;
+    const notes = findNoteList(data.tasks, taskId, bugId);
+    if (!notes || notes.some(n => n.id === note.id)) return null;
     // 创建时间锚点（"已修改"判断）：旧客户端不带 createdAt 时补默认值
     const normalized = { ...note };
     if (typeof normalized.createdAt !== 'number') normalized.createdAt = normalized.updatedAt || Date.now();
-    bug.notes.push(normalized);
-    return { type: 'addBugNote', taskId, bugId, note: { ...normalized } };
+    notes.push(normalized);
+    return bugId
+      ? { type: 'addBugNote', taskId, bugId, note: { ...normalized } }
+      : { type: 'addNote', taskId, note: { ...normalized } };
   });
 
-  if (result.change) {
-    broadcast(_wss, {
-      type: 'broadcast',
-      originClientId: msg.clientId,
-      change: result.change,
-      version: result.version,
-    });
-  }
+  broadcastChange(_wss, msg.clientId, result);
 }
 
-async function handleUpdateBugNote(ws, msg, _wss) {
-  const { taskId, bugId, noteId, content, updatedAt } = msg.data || {};
-  const imageValue = msg.data && msg.data.image;
-  const removeImage = msg.data && msg.data.removeImage;
-  if (!taskId || !bugId || !noteId) return;
-  // 纯图片移除（removeImage 按文件名，或旧语义 image:null）也合法；content 与移除参数均缺省时拒绝
-  if (content === undefined && removeImage === undefined && imageValue !== null) return;
+async function handleUpdateNote(ws, msg, _wss) {
+  const { taskId, bugId, noteId, content, updatedAt, removeImage } = msg.data || {};
+  if (!taskId || !noteId) return;
+  // 纯图片移除（removeImage 按文件名）也合法；content 与移除参数均缺省时拒绝
+  if (content === undefined && removeImage === undefined) return;
 
-  let removedNoteImage = null;
-  const removedNoteImages = []; // 闭包（函数顶部 let 声明）：广播后统一清理被移除的图片文件
+  const removedNoteImages = []; // 闭包：广播后统一清理被移除的图片文件
   const result = await updateData((data) => {
-    const { note } = findBugAndNote(data.tasks, taskId, bugId, noteId);
+    const notes = findNoteList(data.tasks, taskId, bugId);
+    const note = notes && notes.find(n => n.id === noteId);
     if (!note) return null;
     // 更新权限：仅作者本人可修改（含移除图片）
     if (note.clientId !== msg.clientId) return null;
-    // 变更判定：content 更新 / removeImage 命中 / 旧语义 image:null 命中，任一才算有变更；
+    // 变更判定：content 更新 / removeImage 命中，任一才算有变更；
     // 全部未命中（如 removeImage 不在 images 中）→ return null，避免无效广播与版本递增
     let changed = false;
     if (content !== undefined) {
@@ -832,102 +668,73 @@ async function handleUpdateBugNote(ws, msg, _wss) {
       note.updatedAt = updatedAt || Date.now();
       changed = true;
     }
-    // 旧语义：image:null 移除单图（兼容旧客户端）
-    if (imageValue === null && typeof note.image === 'string') {
-      removedNoteImage = note.image;
-      note.image = null;
-      changed = true;
-    }
-    // 新语义：removeImage 按文件名从多图数组中移除
+    // removeImage 按文件名从多图数组中移除
     if (typeof removeImage === 'string' && Array.isArray(note.images)) {
       const ri = note.images.indexOf(removeImage);
       if (ri !== -1) { note.images.splice(ri, 1); removedNoteImages.push(removeImage); changed = true; }
     }
     if (!changed) return null;
-    return { type: 'updateBugNote', taskId, bugId, noteId, content: note.content, updatedAt: note.updatedAt, images: [...(note.images || [])] };
+    const images = [...(note.images || [])];
+    return bugId
+      ? { type: 'updateBugNote', taskId, bugId, noteId, content: note.content, updatedAt: note.updatedAt, images }
+      : { type: 'updateNote', taskId, noteId, content: note.content, updatedAt: note.updatedAt, images };
   });
 
-  if (result.change) {
-    broadcast(_wss, {
-      type: 'broadcast',
-      originClientId: msg.clientId,
-      change: result.change,
-      version: result.version,
-    });
-
-    // 数据写盘成功并广播后，再清理被移除的图片文件（best-effort，ENOENT 容忍）
-    if (removedNoteImage) {
-      try {
-        fs.unlinkSync(path.join(UPLOADS_DIR, removedNoteImage));
-        console.log(`[Note] 已清理备注图片: ${removedNoteImage}`);
-      } catch (e) {
-        if (e.code !== 'ENOENT') console.error(`[Note] 清理备注图片失败: ${removedNoteImage}`, e.message);
-      }
-    }
-    removedNoteImages.forEach(f => {
-      try {
-        fs.unlinkSync(path.join(UPLOADS_DIR, f));
-        console.log('[Note] 已清理备注图片: ' + f);
-      } catch (e) {
-        if (e.code !== 'ENOENT') console.error('[Note] 清理备注图片失败:', f, e.message);
-      }
-    });
-  }
+  broadcastChange(_wss, msg.clientId, result);
+  // 数据写盘成功并广播后，再清理被移除的图片文件（best-effort，ENOENT 容忍）
+  if (result.change) removedNoteImages.forEach(deleteImageFile);
 }
 
-async function handleDeleteBugNote(ws, msg, _wss) {
+async function handleDeleteNote(ws, msg, _wss) {
   const { taskId, bugId, noteId } = msg.data || {};
-  if (!taskId || !bugId || !noteId) return;
+  if (!taskId || !noteId) return;
 
   snapshotBeforeDelete(); // 删除前快照：可回滚
   let deletedNoteImages = [];
   const result = await updateData((data) => {
-    const { bug, note } = findBugAndNote(data.tasks, taskId, bugId, noteId);
-    if (!bug || !note) return null;
+    const notes = findNoteList(data.tasks, taskId, bugId);
+    const note = notes && notes.find(n => n.id === noteId);
+    if (!note) return null;
     // 删除权限与更新一致：仅作者本人可删除
     if (note.clientId !== msg.clientId) return null;
-    const index = bug.notes.findIndex(n => n.id === noteId);
+    const index = notes.findIndex(n => n.id === noteId);
     if (index === -1) return null;
     // splice 前记录备注图片（多图），供删除后清理文件
     deletedNoteImages = [...(note.images || [])];
-    bug.notes.splice(index, 1);
-    return { type: 'deleteBugNote', taskId, bugId, noteId };
+    notes.splice(index, 1);
+    return bugId
+      ? { type: 'deleteBugNote', taskId, bugId, noteId }
+      : { type: 'deleteNote', taskId, noteId };
   });
 
-  if (result.change) {
-    broadcast(_wss, {
-      type: 'broadcast',
-      originClientId: msg.clientId,
-      change: result.change,
-      version: result.version,
-    });
-
-    // 数据写盘成功并广播后，再清理备注图片文件（best-effort，ENOENT 容忍）
-    deletedNoteImages.forEach(filename => {
-      try {
-        fs.unlinkSync(path.join(UPLOADS_DIR, filename));
-        console.log(`[Note] 已清理备注图片: ${filename}`);
-      } catch (e) {
-        if (e.code !== 'ENOENT') console.error(`[Note] 清理备注图片失败: ${filename}`, e.message);
-      }
-    });
-  }
+  broadcastChange(_wss, msg.clientId, result);
+  // 数据写盘成功并广播后，再清理备注图片文件（best-effort，ENOENT 容忍）
+  if (result.change) deletedNoteImages.forEach(deleteImageFile);
 }
 
 function handleRequestSync(ws, _wss) {
-  const data = readData();
-  sendTo(ws, {
-    type: 'fullSync',
-    data,
-    version: data.version,
-  });
+  sendFullSync(ws);
   // 同时发送当前在线人数
-  let count = 0;
-  _wss.clients.forEach((client) => {
-    if (client.readyState === 1) count++;
-  });
-  sendTo(ws, { type: 'clientCount', count });
+  sendTo(ws, { type: 'clientCount', count: countOpenClients(_wss) });
 }
+
+/** 消息类型 → 处理函数（备注六个类型两两复用同一函数，内部按 bugId 有无分流） */
+const WS_HANDLERS = {
+  update: handleUpdate,
+  add: handleAdd,
+  delete: handleDelete,
+  removeImage: handleRemoveImage,
+  createTask: handleCreateTask,
+  updateTask: handleUpdateTask,
+  deleteTask: handleDeleteTask,
+  addNote: handleAddNote,
+  updateNote: handleUpdateNote,
+  deleteNote: handleDeleteNote,
+  addBugNote: handleAddNote,
+  updateBugNote: handleUpdateNote,
+  deleteBugNote: handleDeleteNote,
+  requestSync: handleRequestSync,
+};
 
 async function handleMessage(ws, rawMessage, _wss) {
   let msg;
@@ -937,49 +744,12 @@ async function handleMessage(ws, rawMessage, _wss) {
     return;
   }
 
-  switch (msg.type) {
-    case 'update':
-      try { await handleUpdate(ws, msg, _wss); } catch (e) { console.error('[WS] handleUpdate 错误:', e.message); }
-      break;
-    case 'add':
-      try { await handleAdd(ws, msg, _wss); } catch (e) { console.error('[WS] handleAdd 错误:', e.message); }
-      break;
-    case 'delete':
-      try { await handleDelete(ws, msg, _wss); } catch (e) { console.error('[WS] handleDelete 错误:', e.message); }
-      break;
-    case 'removeImage':
-      try { await handleRemoveImage(ws, msg, _wss); } catch (e) { console.error('[WS] handleRemoveImage 错误:', e.message); }
-      break;
-    case 'createTask':
-      try { await handleCreateTask(ws, msg, _wss); } catch (e) { console.error('[WS] handleCreateTask 错误:', e.message); }
-      break;
-    case 'updateTask':
-      try { await handleUpdateTask(ws, msg, _wss); } catch (e) { console.error('[WS] handleUpdateTask 错误:', e.message); }
-      break;
-    case 'deleteTask':
-      try { await handleDeleteTask(ws, msg, _wss); } catch (e) { console.error('[WS] handleDeleteTask 错误:', e.message); }
-      break;
-    case 'addNote':
-      try { await handleAddNote(ws, msg, _wss); } catch (e) { console.error('[WS] handleAddNote 错误:', e.message); }
-      break;
-    case 'updateNote':
-      try { await handleUpdateNote(ws, msg, _wss); } catch (e) { console.error('[WS] handleUpdateNote 错误:', e.message); }
-      break;
-    case 'deleteNote':
-      try { await handleDeleteNote(ws, msg, _wss); } catch (e) { console.error('[WS] handleDeleteNote 错误:', e.message); }
-      break;
-    case 'addBugNote':
-      try { await handleAddBugNote(ws, msg, _wss); } catch (e) { console.error('[WS] handleAddBugNote 错误:', e.message); }
-      break;
-    case 'updateBugNote':
-      try { await handleUpdateBugNote(ws, msg, _wss); } catch (e) { console.error('[WS] handleUpdateBugNote 错误:', e.message); }
-      break;
-    case 'deleteBugNote':
-      try { await handleDeleteBugNote(ws, msg, _wss); } catch (e) { console.error('[WS] handleDeleteBugNote 错误:', e.message); }
-      break;
-    case 'requestSync':
-      handleRequestSync(ws, _wss);
-      break;
+  const handler = WS_HANDLERS[msg.type];
+  if (!handler) return;
+  try {
+    await handler(ws, msg, _wss);
+  } catch (e) {
+    console.error(`[WS] handle_${msg.type} 错误:`, e.message);
   }
 }
 

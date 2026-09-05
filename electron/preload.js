@@ -5,8 +5,6 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('electronAPI', {
-  isElectron: true,
-
   /**
    * 获取本机局域网 IP 地址
    */

@@ -12,39 +12,15 @@
  * 隔离：BUGLIST_DATA_ROOT 指向临时目录，绝不触碰真实 D:\Bug清单 数据；
  *       运行结束（含异常路径）在 finally 中关闭服务并清理该临时目录。
  */
+// ⚠️ 先 require helpers（副作用设置 BUGLIST_DATA_ROOT），再 require server —— 顺序不可反
 const fs = require('fs');
 const http = require('http');
-const os = require('os');
 const path = require('path');
-
-// ⚠️ 必须在 require('../server') 之前设置数据目录（server.js 在 require 时计算 DATA_ROOT）
-const DATA_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'buglist-archive-'));
-process.env.BUGLIST_DATA_ROOT = DATA_ROOT;
-
+const H = require('./helpers');
 const { startServer } = require('../server');
-const WebSocket = require('ws');
+const { DATA_ROOT, DATA_FILE, assert, sleep, readData, connectWS, teardown, onFatal } = H;
 
-const DATA_FILE = path.join(DATA_ROOT, 'data.json');
-let passed = 0;
-let failed = 0;
-
-function assert(condition, name) {
-  if (condition) {
-    console.log(`  [PASS] ${name}`);
-    passed++;
-  } else {
-    console.log(`  [FAIL] ${name}`);
-    failed++;
-  }
-}
-
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function readData() {
-  return JSON.parse(fs.readFileSync(DATA_FILE, 'utf-8'));
-}
+// assert/sleep/readData 见 helpers
 
 /** 按 id 查找 bug（不依赖数组索引：删除防线缺失的红灯阶段索引会漂移，红/绿两阶段都必须稳定断言） */
 function findBug(bugId) {
@@ -72,26 +48,7 @@ function writeSeed() {
   }));
 }
 
-function connectWS(port, label) {
-  const ws = new WebSocket(`ws://localhost:${port}`);
-  const messages = [];
-  ws.on('message', (raw) => {
-    try { messages.push(JSON.parse(raw.toString())); } catch (e) { /* 忽略非 JSON */ }
-  });
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(`${label} WS 连接超时`)), 5000);
-    ws.on('open', () => {
-      clearTimeout(timer);
-      resolve({
-        ws,
-        messages,
-        send(obj) { ws.send(JSON.stringify(obj)); },
-        close() { try { ws.close(); } catch (e) { /* 忽略 */ } },
-      });
-    });
-    ws.on('error', (err) => { clearTimeout(timer); reject(err); });
-  });
-}
+// connectWS 见 helpers
 
 function httpPostJson(port, apiPath, bodyObj) {
   return new Promise((resolve, reject) => {
@@ -190,19 +147,12 @@ async function main() {
     await sendAndSettle(A, { type: 'createTask', clientId: 'A', data: { task: { id: 'task-empty', name: '' } } });
     assert(readData().tasks.find(t => t.id === 'task-empty').name === '新项目', 'createTask 空名兜底为「新项目」');
 
+    const { passed, failed } = H.getCounts();
     console.log(`\n结果: ${passed} 通过, ${failed} 失败`);
   } finally {
-    // 清理范式同 test-validation-guards.js：关客户端 → 关服务 → 等待收尾 → 删临时目录（在 process.exit 之前生效）
-    if (A) A.close();
-    if (httpServer) httpServer.close();
-    await sleep(200);
-    try { fs.rmSync(DATA_ROOT, { recursive: true, force: true }); } catch (e) { /* 忽略清理失败 */ }
+    await teardown(httpServer, A);
   }
-  process.exit(failed > 0 ? 1 : 0);
+  process.exit(H.exitCode());
 }
 
-main().catch((err) => {
-  console.error('测试执行异常:', err);
-  try { fs.rmSync(DATA_ROOT, { recursive: true, force: true }); } catch (e) { /* 忽略 */ }
-  process.exit(1);
-});
+main().catch(onFatal);
