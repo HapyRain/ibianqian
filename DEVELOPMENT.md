@@ -65,6 +65,29 @@ npm run build        # electron-builder 打便携 exe → dist/任务清单.exe
 - 打包若卡在二进制下载，先设国内镜像：`ELECTRON_BUILDER_BINARIES_MIRROR="https://npmmirror.com/mirrors/electron-builder-binaries/"`（详见 `docs/archive/HANDOFF.md` 第三节）。
 - 首次启动会弹**模式选择**：服务器（本机存数据）或客户端（填主机 IP:端口 连接）。
 - 关闭窗口 = 最小化到托盘（不退出）；托盘右键可置顶 / 退出；单实例运行。
+- 打包产物名由 `electron-builder.yml` 的 `portable.artifactName` 决定：`bianqian-${version}-win-${arch}.exe`（版本号取自 `package.json`，发版时两处同步）。
+
+---
+
+## ✅ 测试与 CI
+
+```bash
+npm test                              # 依次跑 6 个集成套件（任一失败即中断，退出码非 0）
+node test/test-archive-guards.js      # 单跑一个套件（test/test-*.js 都是独立 node 脚本）
+```
+
+| 套件 | 覆盖 |
+|---|---|
+| `test-validation-guards.js` | 28 项：字段归一化、非法值拦截、备份/快照、端口等 |
+| `test-image-lifecycle.js` | 25 项：上传 → 引用 → 删除 → 文件清理全生命周期 |
+| `test-note-image.js` | 51 项：备注多图（含 `DELETE /api/upload` 引用反查与事务性移除） |
+| `test-note-ownership.js` | 12 项：备注归属权限（他人备注不可删改） |
+| `test-template-guard.js` | 1 项：`index.html` 无自闭合自定义元素（`<el-* />` 防线） |
+| `test-archive-guards.js` | 16 项：归档状态机 + 已完成/已归档拒删 + 导入归一化 |
+
+- 所有套件通过 `BUGLIST_DATA_ROOT` 指向临时目录隔离数据，**不碰** `D:\Bug清单\`；共用启动与断言工具在 `test/helpers.js`。
+- **CI**（`.github/workflows/ci.yml`）：push / PR 到 `main` 触发，Node **18.x + 20.x** 双版本矩阵跑 `npm ci` + `npm test`；设 `ELECTRON_SKIP_BINARY_DOWNLOAD=1` 跳过 Electron 二进制下载（测试只用到纯 node 服务端 + ws）。
+- **本地跑测试时**：套件自己 spawn 服务并按 `BUGLIST_PORT`/临时端口隔离；手写临时验证脚本必须 `try/finally` kill 子进程，否则残留进程占住端口（见避坑索引）。
 
 ---
 
@@ -72,21 +95,25 @@ npm run build        # electron-builder 打便携 exe → dist/任务清单.exe
 
 | 文件 | 规模 | 职责 | 关键入口 |
 |---|---|---|---|
-| `server.js` | ~1820 行 | HTTP + WS 服务端、文件锁、持久化、图片上传 API、导出/导入、备份/快照、端口探测（`BUGLIST_PORT` 可覆盖起始端口） | `startServer()`、`handleMessage()` |
-| `public/index.html` | ~750 行 | Vue3 单页模板：启动模式对话框、项目标签栏、任务列表卡片（搜索条+筛选+排序）、新增任务"下一步"面板（deadline/备注）、备注/粘贴/预览弹窗、小火箭 | 启动对话框、任务列表卡片 |
-| `public/app.js` | ~4000 行 | Vue3 应用逻辑：WS 客户端、身份、多图、备注、备份、搜索、排序、状态动效、手动 FLIP/飞出动画、负责人 hover、deadline 面板 + 工时评估、深夜彩蛋 | `connectWebSocket()`、`handleMessage()` |
-| `public/style.css` | ~2330 行 | 手写样式（CSS 变量 + 响应式 + 动效） | — |
-| `public/themes.js` | ~530 行 | **13 套成品主题（6 浅 7 深）** + 主题 CSS 生成器（`buildThemeCss`：17 色变量 + rgb/color-mix 派生 + `deriveNotePalette` 主题和谐色板 + Element Plus 联动 + 主题专属装饰） | `BUGLIST_THEMES` / `buildThemeCss` |
+| `server.js` | 1499 行 | HTTP + WS 服务端、文件锁、持久化、图片上传 API、导出/导入、备份/快照、端口探测（`BUGLIST_PORT` 可覆盖起始端口） | `startServer()`、`handleMessage()` |
+| `public/index.html` | 746 行 | Vue3 单页模板：启动模式对话框、项目标签栏、任务列表卡片（搜索条+筛选+排序）、新增任务"下一步"面板（deadline/备注）、备注/粘贴/预览弹窗、小火箭 | 启动对话框、任务列表卡片 |
+| `public/app.js` | 3544 行 | Vue3 应用逻辑：WS 客户端、身份、多图、备注、备份、搜索、排序、状态动效、手动 FLIP/飞出动画、负责人 hover、deadline 面板 + 工时评估、深夜彩蛋 | `connectWebSocket()`、`handleMessage()` |
+| `public/style.css` | 2295 行 | 手写样式（CSS 变量 + 响应式 + 动效） | — |
+| `public/themes.js` | 508 行 | **13 套成品主题（6 浅 7 深）** + 主题 CSS 生成器（`buildThemeCss`：17 色变量 + rgb/color-mix 派生 + `deriveNotePalette` 主题和谐色板 + Element Plus 联动 + 主题专属装饰） | `BUGLIST_THEMES` / `buildThemeCss` |
 | `public/tuner.html` | — | **主题展厅 / 在线调色台**（开发辅助，`/tuner.html`）：iframe 完整预览 13 套主题（含星云/纸纹/代码雨等专属元素）+ 17 色色板详情 + 高级微调 + 复制导出主题对象 | — |
 | `build/icon.ico` | 164KB | **应用图标 7 档**（256/128/64/48/32/24/16，用户设计图 `build/icon-src.png` 转制），electron-builder 打包用 | — |
 | `public/favicon.ico` | 9.6KB | 浏览器标签页图标（48/32/16） | — |
 | `build/icon-src.png` | — | 应用图标源图（用户设计，730×742，供衍生） | — |
-| `electron/main.js` | ~360 行 | 托盘（应用图标）、单实例锁、窗口管理（窗口图标）、IPC（get-local-ip / write-backup） | `app.whenReady` |
-| `electron/preload.js` | 43 行 | contextBridge 暴露 `electronAPI` | — |
-| `electron-builder.yml` | 27 行 | portable 打包配置，输出 `dist/`；未配置代码签名（自签证书无公信任锚，已移除） | — |
-| `build/` | — | 7za 代理（C# 源码 + postinstall 脚本；`7za-proxy.exe` 每次 npm install 重新编译，不入库）、icon.ico | 坑 1 的固化修复 |
+| `electron/main.js` | 330 行 | 托盘（应用图标）、单实例锁、窗口管理（窗口图标）、IPC（get-local-ip / write-backup） | `app.whenReady` |
+| `electron/preload.js` | 38 行 | contextBridge 暴露 `electronAPI` | — |
+| `electron-builder.yml` | 19 行 | portable 打包配置，输出 `dist/`；未配置代码签名（自签证书无公信任锚，已移除） | — |
+| `build/` | — | 7za 代理（C# 源码 + postinstall 脚本；`7za-proxy.exe` 每次 npm install 重新编译，不入库）、icon.ico、icon-src.png | 坑 1 的固化修复 |
+| `test/test-*.js` 共 6 个测试 | — | 集成测试（多图生命周期 / 备注权限 / 备注图片 / 校验防护 / 模板自闭合防线 / 归档状态机），临时数据目录隔离；`test/helpers.js` 为共用启动·断言工具（非套件） | `npm test` |
+| `.github/workflows/ci.yml` | — | **CI**：push / PR 到 `main` 时在 Node 18.x + 20.x 上跑 `npm ci` + `npm test`（`ELECTRON_SKIP_BINARY_DOWNLOAD=1` 免下 Electron 二进制，`BUGLIST_DATA_ROOT` 指向 runner 临时目录） | GitHub Actions |
+| `assets/screenshots/` | 3 张 | README 展示图：`home.png`（主界面）/ `home-delete.png`（删除交互）/ `notes.png`（备注弹窗）；原 `image/` 目录 2026-09-03 已按用途拆分（图标源图 → `build/icon-src.png`），**产品截图与打包资源分工不同** | README「长这样」 |
+| `.editorconfig` / `.gitattributes` / `.nvmrc` | — | 编辑器与仓库基础设施：统一缩进与换行、`* text=auto` 行尾归一化、本地 Node 版本基线（18） | — |
+| `LICENSE` | MIT | 许可（README 徽章与 package.json `license` 三处一致） | — |
 | `D:\Bug清单\{用户名}\` | — | **运行时数据目录**：`data.json` + `uploads/`（图片） | — |
-| `test/test-*.js` 共 6 个测试 | — | 集成测试（多图生命周期 / 备注权限 / 备注图片 / 校验防护 / 模板自闭合防线 / 归档状态机），临时数据目录隔离 | `npm test` |
 | `docs/smoke-checklist-2026-08-15.md` | — | **打包前手工验收清单**（A~L 共 12 组：布局/状态排序/负责人/deadline/深夜彩蛋/搜索/多图/删除/备注/数据安全/回顶/回归底线）；**本地文档，不入库**（见 .gitignore） | 打包前逐项打勾 |
 | `dist/` | — | 当前打包输出：`任务清单.exe`（便携单文件）+ `win-unpacked/`（文件夹版），`npm run build` 生成，不入库 | — |
 | `docs/` | — | 本地文档目录（验收清单/归档/规格/迭代建议）：**本地维护，不入库**（需求方约定）；README 中所有 `docs/` 引用均指本地文件 | — |
@@ -217,5 +244,6 @@ npm run build        # electron-builder 打便携 exe → dist/任务清单.exe
 | 08-16 | **深夜彩蛋**：状态正向推进 + 20:00-05:00 弹安慰语录（6 条 emoji 文案定稿，ElMessage 小提示无图标，4.5s 自动消失）——0.3 前的收尾彩蛋 |
 | 08-16 | deadline 交互迭代：「此刻」按钮改为**工时评估**（deadline 不可能=现在；弹「请评估所需工时 🌙」选 1-5 天 → 自动算当前时间+N 天填好；内置此刻按钮隐藏）；**0.2.1 定稿**（0.3 前置小点先行发布）：负责人 hover 归属 + deadline 工时评估 + 深夜彩蛋 + 主题和谐色板 |
 | 09-03 | **UX 批次（9 项，spec 第 1–9 节 + 交叉评审裁决①–⑨）**：① 吸顶区让位自绘标题栏（`--titlebar-h` 单一事实源，浏览器 0/Electron 36）+ 吸顶投影；②③ 火箭条件显隐（滚动阈值显、回顶/近底隐）+ 发射后自动收起；④ 删除项目二次确认（ElMessageBox，文案含「含已归档」）；⑤ 新建项目本地先行两步式（临时项不广播、确认才落库广播、占位「新项目」、Esc/空名丢弃，服务端兜底名同步改「新项目」）；⑥ 启动弹窗 clamp 流体适配（600×530 免滚动、卡片 wrap 替代断点竖排）；⑦ **归档体系**（已完成拒删、删除按钮换归档、面板底扑克牌堆 + 展开只读 + 原地恢复、`archived/archivedAt` 白名单 + 状态机 + `handleAdd`/导入归一化，`test-archive-guards.js` 16 项覆盖）；⑧ 贴底布局 + 页脚折叠线下；⑨ 全宽拖拽无跳变（header-right `margin-left:auto`+wrap、按钮文字 max-width 平滑收起、断点离散覆盖改 clamp）；最小窗 600×530。全 6 集成测试绿 |
+| 09-03 | **仓库整理与发版收尾**：测试脚本归入 `test/`（共用工具抽到 `test/helpers.js`）、`image/` 按用途拆分（截图 → `assets/screenshots/`，图标源图 → `build/icon-src.png`）、移除 `data.json` 与自签证书的跟踪、打包输出统一 `dist/` 且便携产物名改为 `bianqian-${version}-win-${arch}.exe`；新增 **GitHub Actions CI**（Node 18/20 跑 `npm test`）；**`package-lock.json` 元数据同步**（version 1.0.0→0.3.0 + license/engines，依赖树零漂移）并把 `.dsh/` 补回 `.gitignore` |
 
 > 旧产物目录（dist/release/pack10-14）与 pack.zip 已于 2026-07-18 清理删除；`pack15/`、`pack814/` 为历史产物，当前输出 `dist/`。

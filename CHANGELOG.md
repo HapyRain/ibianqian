@@ -6,10 +6,15 @@
 
 ## [未发布]
 
+### 新增
+- **GitHub Actions CI**：push / PR 到 `main` 时在 Node 18.x + 20.x 双版本矩阵跑 `npm ci` + `npm test`。
+
 ### 变更
-- 打包输出目录统一为 `dist/`（原 `pack814/`）；从分发产物中移除遗留的根目录 `data.json`。
+- 打包输出目录统一为 `dist/`（原 `pack814/`）；便携产物名改为 `bianqian-${version}-win-${arch}.exe`，随 `package.json` 版本号同步；从分发产物中移除遗留的根目录 `data.json`。
+- 仓库结构调整：测试脚本归入 `test/`（共用工具抽到 `test/helpers.js`），`image/` 按用途拆分（产品截图 → `assets/screenshots/`，图标源图 → `build/icon-src.png`）。
+- `package-lock.json` 元数据同步（version 1.0.0 → 0.3.0 + license/engines，依赖树零漂移），`npm ci` 的校验口径与 `package.json` 一致。
 - 移除本地自签代码证书（非商签、无公信任锚，价值不及泄露面）。
-- 仓库清理：移除 `reports/` 一次性开发报告目录、`build/7za-proxy.exe`（postinstall 重生成），并从跟踪中剔除 `data.json`。
+- 仓库清理：移除 `reports/` 一次性开发报告目录、`build/7za-proxy.exe`（postinstall 重生成），并从跟踪中剔除 `data.json`；`.dsh/`（Agent 本地配置）补回 `.gitignore`。
 
 ## [0.3.0] - 2026-09-03
 

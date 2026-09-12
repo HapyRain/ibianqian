@@ -25,6 +25,7 @@ uploads/
 docs/
 
 # Agent / 工具本地配置与缓存（各工具自管，不入库）
+.dsh/
 .claude/
 .superpowers/
 .mimocode/

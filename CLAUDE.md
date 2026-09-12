@@ -13,18 +13,20 @@ npm start                  # 纯 Web 启动（打印局域网地址，3050–307
 npm run dev                # node --watch 热重载
 npm run electron           # Electron 壳调试（内嵌同一个 server.js，托盘常驻）
 npm run build              # electron-builder 打便携 exe → dist/任务清单.exe
-npm test                   # 依次跑 6 个集成测试
-node test/test-validation-guards.js   # 跑单个测试（test/test-*.js 都是独立 node 脚本）
+npm test                   # 依次跑 6 个集成套件（任一失败即中断；共 133 项断言）
+node test/test-validation-guards.js   # 跑单个测试（test/test-*.js 都是独立 node 脚本，共用工具在 test/helpers.js）
 ```
 
-没有 lint / formatter / 单元测试框架；测试是手写集成脚本（起真实 server + ws 客户端断言）。打包卡二进制下载时设 `ELECTRON_BUILDER_BINARIES_MIRROR="https://npmmirror.com/mirrors/electron-builder-binaries/"`。
+没有 lint / formatter / 单元测试框架；测试是手写集成脚本（起真实 server + ws 客户端断言）。打包卡二进制下载时设 `ELECTRON_BUILDER_BINARIES_MIRROR="https://npmmirror.com/mirrors/electron-builder-binaries/"`。CI 见 `.github/workflows/ci.yml`（push / PR 到 main → Node 18.x + 20.x 跑 `npm ci` + `npm test`）。
+
+⚠️ **沙箱下写临时验证脚本**：Node 的 `child_process` 管道 stdio 会 EPERM（命名管道受限）——不要在 `node -e` / 脚本里 `execFileSync('git'…)` 或 `spawn(..., {stdio:'pipe'})`；改用 PowerShell 先把命令输出落文件、Node 只 `readFileSync`（另：PowerShell 的 `Out-File` 带 BOM，JSON 解析前先 `replace(/^\uFEFF/,'')`）。验证脚本 spawn 服务后必须 `try/finally` kill。
 
 ## 架构大图
 
 **没有构建步骤**：前端是原生三件套（`public/index.html` + `app.js` + `style.css` + `themes.js`），Vue 3 与 Element Plus 通过 `/vendor/*` 路由直接映射到 `node_modules/`（离线本地化）。改 `public/` 下文件刷新即生效，无需任何编译。
 
-- **`server.js`（~1820 行，单文件）**：HTTP + WebSocket 服务端合一，无框架、无数据库。入口 `startServer()`（底部直接执行；也 `module.exports` 供 Electron 与测试 require）。所有消息进 `handleMessage()` 分发。图片上传是手写 multipart 解析 + MIME 白名单 + 魔数校验。
-- **`public/app.js`（~4000 行）**：Vue 3 应用逻辑（WS 客户端、身份、多图、备注、动画）。
+- **`server.js`（1499 行，单文件）**：HTTP + WebSocket 服务端合一，无框架、无数据库。入口 `startServer()`（底部直接执行；也 `module.exports` 供 Electron 与测试 require）。所有消息进 `handleMessage()` 分发。图片上传是手写 multipart 解析 + MIME 白名单 + 魔数校验。
+- **`public/app.js`（3544 行）**：Vue 3 应用逻辑（WS 客户端、身份、多图、备注、动画）。
 - **`public/themes.js`**：13 套主题 + `buildThemeCss` 生成器（17 色变量 → 派生色 + Element Plus 联动）。
 - **`electron/main.js`**：托盘、单实例锁、IPC；通过 `require('../server')` 内嵌同一个服务端。
 
