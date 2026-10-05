@@ -4,7 +4,7 @@
  * - 系统托盘（关闭隐藏、双击显示、置顶开关、退出）
  * - BrowserWindow 加载本地服务
  */
-const { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain, globalShortcut } = require('electron');
+const { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain, globalShortcut, dialog, screen } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -127,9 +127,14 @@ ipcMain.handle('get-local-ip', () => {
 // ================================================================
 ipcMain.handle('write-backup', async (_event, { serverIp, data }) => {
   try {
-    // Windows 目录不允许冒号，将 IP:port 中的 : 替换为 _
-    const safeName = serverIp.replace(/[:*?"<>|]/g, '_');
-    const backupDir = path.join('D:\\Bug清单\\pc', safeName);
+    // 清洗目录名：Windows 非法字符（含冒号）替换为 _，再拒绝路径分隔符与 ..
+    // serverIp 来自渲染进程不可信任：只清洗不过校验会被 ..\ 等输入带出备份根目录（路径穿越）
+    let safeName = String(serverIp || '').replace(/[:*?"<>|]/g, '_').trim();
+    if (!safeName || /[\\/]/.test(safeName) || safeName.includes('..')) {
+      return { ok: false, error: '非法的服务器地址：' + serverIp };
+    }
+    // 备份根目录：userData/backups/pc（旧版硬编码 D:\Bug清单\pc 已废弃，历史备份请手动搬移）
+    const backupDir = path.join(app.getPath('userData'), 'backups', 'pc', safeName);
     if (!fs.existsSync(backupDir)) {
       fs.mkdirSync(backupDir, { recursive: true });
     }
@@ -235,12 +240,65 @@ function registerWindowShortcut(accel) {
 ipcMain.handle('shortcut-set', (_e, accel) => registerWindowShortcut(accel));
 
 // ================================================================
+// 窗口状态持久化（userData/window-state.json：位置/大小/最大化/置顶）
+// ================================================================
+const WINDOW_STATE_FILE = path.join(app.getPath('userData'), 'window-state.json');
+const DEFAULT_WIN_STATE = { bounds: { width: 900, height: 600 }, isMaximized: false, alwaysOnTop: false };
+let winStateTimer = null;
+
+/** 防抖保存窗口状态（resize/move 高频触发，500ms 合并一次写盘） */
+function scheduleSaveWindowState() {
+  if (winStateTimer) clearTimeout(winStateTimer);
+  winStateTimer = setTimeout(saveWindowState, 500);
+}
+
+/** 同步保存当前窗口状态（写盘失败静默，不影响运行） */
+function saveWindowState() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  try {
+    const state = {
+      // getNormalBounds：最大化时仍记录"还原后"的正常尺寸，避免把最大化尺寸当成默认尺寸存下来
+      bounds: mainWindow.getNormalBounds(),
+      isMaximized: mainWindow.isMaximized(),
+      alwaysOnTop: mainWindow.isAlwaysOnTop(),
+    };
+    fs.writeFileSync(WINDOW_STATE_FILE, JSON.stringify(state, null, 2), 'utf-8');
+  } catch (e) { /* 忽略写盘失败 */ }
+}
+
+/** 校验窗口矩形是否至少有 100×100 落在某块显示屏的可视区域内（防显示器拔掉后窗口漂出屏幕） */
+function boundsInDisplay(bounds) {
+  if (!bounds || !Number.isFinite(bounds.x) || !Number.isFinite(bounds.y) ||
+      !Number.isFinite(bounds.width) || !Number.isFinite(bounds.height)) return false;
+  return screen.getAllDisplays().some((d) => {
+    const a = d.workArea;
+    const w = Math.min(bounds.x + bounds.width, a.x + a.width) - Math.max(bounds.x, a.x);
+    const h = Math.min(bounds.y + bounds.height, a.y + a.height) - Math.max(bounds.y, a.y);
+    return w >= 100 && h >= 100;
+  });
+}
+
+/** 读取上次的窗口状态；无文件/损坏/位置漂出屏幕/尺寸低于最小窗时回退默认 900×600（居中） */
+function loadWindowState() {
+  try {
+    const raw = JSON.parse(fs.readFileSync(WINDOW_STATE_FILE, 'utf-8'));
+    const b = raw.bounds;
+    if (b && b.width >= 600 && b.height >= 530 && boundsInDisplay(b)) {
+      return { bounds: b, isMaximized: !!raw.isMaximized, alwaysOnTop: !!raw.alwaysOnTop };
+    }
+  } catch (e) { /* 无文件或解析失败 → 默认；screen 未就绪时异常同样走这里 */ }
+  return JSON.parse(JSON.stringify(DEFAULT_WIN_STATE));
+}
+
+// ================================================================
 // 创建主窗口
 // ================================================================
 function createWindow(port) {
-  mainWindow = new BrowserWindow({
-    width: 900,
-    height: 600,
+  // 恢复上次的窗口状态（位置/大小已在读取时校验；无效则回退默认 900×600 居中）
+  const saved = loadWindowState();
+  const winOptions = {
+    width: saved.bounds.width,
+    height: saved.bounds.height,
     minWidth: 600,
     minHeight: 530, /* 最小窗 600×530（spec 第 9 节）：保证启动弹窗与贴底面板在极限小窗下仍完整可用 */
     title: '任务清单 - 多人协同',
@@ -253,7 +311,15 @@ function createWindow(port) {
       contextIsolation: true,
       nodeIntegration: false,
     },
-  });
+  };
+  // x/y 不写进默认配置：首次运行（无状态文件）交给系统居中
+  if (Number.isFinite(saved.bounds.x)) winOptions.x = saved.bounds.x;
+  if (Number.isFinite(saved.bounds.y)) winOptions.y = saved.bounds.y;
+  mainWindow = new BrowserWindow(winOptions);
+
+  // 恢复上次的置顶与最大化
+  if (saved.alwaysOnTop) mainWindow.setAlwaysOnTop(true);
+  if (saved.isMaximized) mainWindow.maximize();
 
   // 加载失败时显示具体错误页面
   mainWindow.webContents.on('did-fail-load', (event, code, desc, url) => {
@@ -271,10 +337,17 @@ function createWindow(port) {
     console.log('[Renderer]', message);
   });
 
+  // 渲染进程崩溃（内存/GPU 等原因）→ 记日志并重载，避免打包 exe 无控制台时白屏挂着
+  mainWindow.webContents.on('render-process-gone', (_event, details) => {
+    console.error('[Electron] 渲染进程崩溃:', details.reason, 'exitCode:', details.exitCode);
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.reload();
+  });
+
   mainWindow.loadURL(`http://localhost:${port}`);
 
   // 关闭窗口 → 隐藏到托盘（不退出）
   mainWindow.on('close', (event) => {
+    saveWindowState(); // 关闭/隐藏前同步保存一份窗口状态（比防抖更可靠）
     if (!app.isQuitting) {
       event.preventDefault();
       mainWindow.hide();
@@ -284,6 +357,10 @@ function createWindow(port) {
   mainWindow.on('closed', () => {
     mainWindow = null;
   });
+
+  // 窗口状态持久化：移动/调整大小防抖保存（close 里另有一份同步保存兜底）
+  mainWindow.on('resize', scheduleSaveWindowState);
+  mainWindow.on('move', scheduleSaveWindowState);
 
   // 窗口置顶状态变化时更新托盘菜单 + 推送渲染进程（标题栏置顶按钮激活态同步）
   mainWindow.on('always-on-top-changed', () => {
@@ -327,8 +404,8 @@ app.whenReady().then(async () => {
   try {
     console.log('[Electron] 数据目录:', process.env.BUGLIST_DATA_ROOT || '(默认)');
 
-    // 启动内嵌 WebSocket 服务器（端口自适应）
-    const { port } = await startServer(3050);
+    // 启动内嵌 WebSocket 服务器（端口自适应；BUGLIST_PORT 可覆盖起始端口）
+    const { port } = await startServer(parseInt(process.env.BUGLIST_PORT, 10) || 3050);
     console.log(`[Electron] 内嵌服务器已启动，端口: ${port}`);
 
     // 创建主窗口
@@ -338,6 +415,13 @@ app.whenReady().then(async () => {
     createTray();
   } catch (err) {
     console.error('[Electron] 启动失败:', err.message);
+    // 打包 exe 无控制台，静默退出用户只看到闪退——用系统对话框给出原因（端口 3050–3070 全忙等）
+    dialog.showMessageBoxSync({
+      type: 'error',
+      title: '任务清单',
+      message: '启动失败',
+      detail: `${err.message}\n\n若为端口占用：默认端口 3050–3070 被其他程序占满时无法启动，请释放端口后重试（可用环境变量 BUGLIST_PORT 指定起始端口）。`,
+    });
     app.quit();
   }
 });

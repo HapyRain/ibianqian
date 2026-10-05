@@ -79,6 +79,9 @@ function acquireLock() {
 let imageMigrationBackedUp = false;
 // 一次性备注图迁移备份标志：仅当真正遇到旧格式 note.image 字符串时才备份一次
 let noteImagesMigrated = false;
+// 只读保护模式：data.json 损坏（解析失败/结构非法）后置位。
+// 置位后所有写操作直接抛错拒绝（绝不以空数据覆盖真实数据），需人工恢复数据文件后重启。
+let readOnlyMode = false;
 
 /**
  * 备注图迁移前的一次性备份（best-effort：成功后才置位，失败可重试，与 bug 图迁移一致）
@@ -182,41 +185,88 @@ function migrateData(data) {
   return data;
 }
 
-function readData() {
-  try {
-    const raw = fs.readFileSync(DATA_FILE, 'utf-8');
-    const data = JSON.parse(raw);
-    return migrateData(data);
-  } catch (err) {
-    if (err.code === 'ENOENT') {
-      // 文件不存在：首次启动，正常
-      return { tasks: [], version: 0 };
-    }
-
-    // JSON 解析失败或磁盘错误：备份损坏文件
-    console.error('[Data] 读取 data.json 失败:', err.message);
+/**
+ * data.json 损坏处理：备份 .corrupted 后进入只读保护模式（仅一次），返回空数据。
+ * 读取路径（fullSync/导出等）仍可用空数据兜底不崩溃；写入路径由 updateData 的 readOnlyMode
+ * 检查统一拒绝——旧实现"损坏后拿空数据继续跑"会导致下一次编辑用空数据永久覆盖真实数据。
+ */
+function enterReadOnlyMode(cause) {
+  if (!readOnlyMode) {
+    readOnlyMode = true;
+    console.error('============================================================');
+    console.error('[Data] ⚠️ data.json 损坏（JSON 解析失败或结构非法），已进入只读保护模式！');
+    console.error('[Data] ⚠️ 原因:', cause.message);
+    console.error('[Data] ⚠️ 所有写入/删除操作将被拒绝，请人工恢复 data.json（或从 backups/ 恢复）后重启服务。');
+    console.error('============================================================');
     try {
-      const timestamp = Date.now();
-      const backupPath = DATA_FILE + '.corrupted.' + timestamp;
+      const backupPath = DATA_FILE + '.corrupted.' + Date.now();
       fs.copyFileSync(DATA_FILE, backupPath);
       console.error(`[Data] 已备份损坏文件到: ${backupPath}`);
     } catch (backupErr) {
       console.error('[Data] 备份损坏文件失败:', backupErr.message);
     }
+  }
+  return { tasks: [], version: 0 };
+}
 
-    return { tasks: [], version: 0 };
+function readData() {
+  let data;
+  try {
+    const raw = fs.readFileSync(DATA_FILE, 'utf-8');
+    data = JSON.parse(raw);
+  } catch (err) {
+    if (err.code === 'ENOENT') {
+      // 文件不存在：首次启动，正常
+      return { tasks: [], version: 0 };
+    }
+    // 区分两类失败：
+    // - 读取 IO 错误（EACCES/EBUSY 等权限/占用）：直接向上抛，中止本次操作——绝不能当作"损坏"而写空数据；
+    // - 仅"文件存在但 JSON 解析失败"才走损坏保护路径（JSON.parse 抛 SyntaxError）
+    if (!(err instanceof SyntaxError)) {
+      throw err;
+    }
+    return enterReadOnlyMode(err);
+  }
+
+  // 结构校验：顶层必须是含 tasks 数组的对象（也是 migrateData 的前置假设），否则视为损坏
+  if (!data || typeof data !== 'object' || Array.isArray(data) || !Array.isArray(data.tasks)) {
+    return enterReadOnlyMode(new Error('data.json 结构非法（缺少 tasks 数组）'));
+  }
+  return migrateData(data);
+}
+
+/**
+ * rename 重试：Windows 下杀毒/索引服务可能短暂占用目标文件导致 EPERM/EACCES，
+ * 50ms 后重试一次，仍失败才抛错（避免单次偶发占用导致整次更新静默丢失）
+ */
+async function renameWithRetry(from, to) {
+  try {
+    fs.renameSync(from, to);
+  } catch (err) {
+    if (err.code !== 'EPERM' && err.code !== 'EACCES') throw err;
+    console.error('[Data] rename 失败（可能被杀毒/索引服务占用），50ms 后重试:', err.message);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    fs.renameSync(from, to); // 重试仍失败则向上抛
   }
 }
 
 /**
- * 原子写入：获取锁 → 执行 transform → 写 .tmp → fs.renameSync → 释放锁
+ * 原子写入：获取锁 → 执行 transform → 写 .tmp（fsync 落盘）→ fs.renameSync → 释放锁
  * @param {Function} transformFn 接收 data，原地修改后返回 change 描述对象
  * @returns {Promise<{ data: object, change: object, version: number }>}
  */
 async function updateData(transformFn) {
+  // 只读保护模式：data.json 损坏后拒绝一切写盘（含导入/上传关联/删除反查），防止空数据覆盖真实数据
+  if (readOnlyMode) {
+    throw new Error('data.json 已损坏，服务器处于只读保护模式，写入被拒绝');
+  }
   const release = await acquireLock();
   try {
     const data = readData();
+    // 双保险：若本次 readData 期间刚发现损坏（首个请求即写入的场景），同样拒绝，绝不以空数据落盘
+    if (readOnlyMode) {
+      throw new Error('data.json 已损坏，服务器处于只读保护模式，写入被拒绝');
+    }
     const change = transformFn(data);
 
     // 无变化时不递增版本、不写盘
@@ -224,16 +274,23 @@ async function updateData(transformFn) {
       return { data, change: null, version: data.version };
     }
 
-    data.version = (data.version || 0) + 1;
+    // version 类型守卫：历史数据可能存成字符串，直接 || 会拼接而非递增
+    data.version = (Number(data.version) || 0) + 1;
 
-    // 原子写入：先写临时文件，再重命名
+    // 原子写入：先写临时文件（fsync 确保数据落盘后再改名，防掉电丢数据），再重命名
     // 写临时文件前清理旧 tmp
     try { fs.unlinkSync(TMP_FILE); } catch (e) { /* 不存在则忽略 */ }
-    fs.writeFileSync(TMP_FILE, JSON.stringify(data, null, 2), 'utf-8');
+    const fd = fs.openSync(TMP_FILE, 'w');
     try {
-      fs.renameSync(TMP_FILE, DATA_FILE);
+      fs.writeFileSync(fd, JSON.stringify(data, null, 2), 'utf-8');
+      fs.fsyncSync(fd);
+    } finally {
+      fs.closeSync(fd);
+    }
+    try {
+      await renameWithRetry(TMP_FILE, DATA_FILE);
     } catch (renameErr) {
-      // rename 失败时清理临时文件
+      // rename 最终失败时清理临时文件
       try { fs.unlinkSync(TMP_FILE); } catch (e) { /* 忽略 */ }
       throw renameErr; // 向上抛出，让调用方知道写入失败
     }
@@ -284,6 +341,7 @@ function backupDataFile() {
 
 /** 删除类操作前的即时快照（不节流，保证删除前一刻的数据可回滚，保留最近 PRE_DELETE_KEEP 份） */
 function snapshotBeforeDelete() {
+  if (readOnlyMode) return; // 只读保护模式：删除必然被拒绝，不打无谓快照
   const result = rotateBackup('pre-delete', String(Date.now()), PRE_DELETE_KEEP);
   if (result && result.error) console.error('[Backup] 删除前快照失败:', result.error.message);
   else if (result) console.log(`[Backup] 删除前快照: ${path.basename(result)}`);
@@ -345,10 +403,19 @@ function broadcastChange(_wss, originClientId, result) {
   });
 }
 
-/** 清理 uploads 图片文件（best-effort，ENOENT 容忍——文件可能已被删） */
+/**
+ * 清理 uploads 图片文件（best-effort，ENOENT 容忍——文件可能已被删）。
+ * 文件名先过 resolveUploadPath 校验（isSafeFilename + resolve 前缀双保险）：
+ * 历史数据可能混入穿越名，此处拒绝删除 uploads/ 之外的任意文件
+ */
 function deleteImageFile(f) {
+  const filePath = resolveUploadPath(f);
+  if (!filePath) {
+    console.error(`[Image] 拒绝删除非法/不安全文件名: ${f}`);
+    return;
+  }
   try {
-    fs.unlinkSync(path.join(UPLOADS_DIR, f));
+    fs.unlinkSync(filePath);
     console.log(`[Image] 已清理图片: ${f}`);
   } catch (e) {
     if (e.code !== 'ENOENT') console.error(`[Image] 清理图片失败: ${f}`, e.message);
@@ -375,13 +442,19 @@ function formatTimestamp(date) {
 
 async function handleUpdate(ws, msg, _wss) {
   const { taskId, bugId, field, value } = msg.data || {};
-  console.log(`[WS] handleUpdate: clientId=${(ws.clientId || '?').substring(0,8)}, taskId=${taskId?.substring(0,8)}, bugId=${bugId}, field=${field}, value=${value}`);
+  // 日志截断（超 200 字符）：防超长 value（如粘贴大文本）刷屏
+  const valuePreview = String(value);
+  const valueLog = valuePreview.length > 200
+    ? `${valuePreview.slice(0, 200)}…(已截断,共${valuePreview.length}字符)`
+    : valuePreview;
+  console.log(`[WS] handleUpdate: clientId=${(ws.clientId || '?').substring(0,8)}, taskId=${taskId?.substring(0,8)}, bugId=${bugId}, field=${field}, value=${valueLog}`);
   if (!taskId || !bugId || !field || value === undefined) return;
 
   // 字段白名单 + 值校验（放在 updateData 之前，尽早 return，避免无谓进锁）
   // 'name' 允许空字符串（清空名称）；图片生命周期改由 upload/removeImage/DELETE 端点管理，'image' 不再走 update
   if (!['name', 'status', 'deadline', 'archived'].includes(field)) return;
-  if (field === 'name' && typeof value !== 'string') return;
+  // name 长度上限 120：超长拒绝
+  if (field === 'name' && (typeof value !== 'string' || value.length > 120)) return;
   if (field === 'status' && !ALLOWED_STATUSES.includes(value)) return;
   // deadline（0.3 体验小点）：仅接受时间戳 number（毫秒）或 null（清除）；非法值一律拒绝
   if (field === 'deadline' && !(typeof value === 'number' && Number.isFinite(value)) && value !== null) return;
@@ -483,15 +556,20 @@ function normalizeBugTrustFields(target, src) {
 
 async function handleAdd(ws, msg, _wss) {
   const { taskId, bug } = msg.data || {};
-  if (!taskId || !bug || !bug.id) return;
+  // taskId / bug.id 必须为非空字符串（防数字 id / 空串污染数据，后续所有查找都按 id 匹配）
+  if (!taskId || typeof taskId !== 'string' || !bug || typeof bug.id !== 'string' || !bug.id) return;
 
   const result = await updateData((data) => {
     const task = data.tasks.find(t => t.id === taskId);
     if (!task) return null;
     // 检查是否已存在（防重复）
     if (task.bugs.some(b => b.id === bug.id)) return null;
-    // 归一化：确保 images 字段为数组（旧客户端 add 不带 images）；statusChangedAt 缺省为当前时间
-    const normalizedBug = { ...bug, images: Array.isArray(bug.images) ? bug.images : [] };
+    // 归一化：确保 images 字段为字符串数组（旧客户端 add 不带 images）；statusChangedAt 缺省为当前时间
+    const normalizedBug = { ...bug, images: Array.isArray(bug.images) ? bug.images.filter(x => typeof x === 'string') : [] };
+    // status 必须在白名单内，否则归一化为默认值「待修复」
+    if (!ALLOWED_STATUSES.includes(normalizedBug.status)) normalizedBug.status = '待修复';
+    // name 长度上限 120：非字符串或超长拒绝（transform 返回 null → 不写盘不广播）
+    if (typeof normalizedBug.name !== 'string' || normalizedBug.name.length > 120) return null;
     if (typeof normalizedBug.statusChangedAt !== 'number') normalizedBug.statusChangedAt = Date.now();
     // assignee（0.3 负责人）/ deadline / archived：与 normalizeBugForImport 共用同一归一化（非法值显式删除）
     normalizeBugTrustFields(normalizedBug, bug);
@@ -506,14 +584,21 @@ async function handleDelete(ws, msg, _wss) {
   const { taskId, bugId } = msg.data || {};
   if (!taskId || !bugId) return;
 
-  // 防线预检（spec 第 7 节）：已完成/已归档任务不可删除——仅避免无谓快照；
+  // 防线预检（spec 第 7 节）：目标不存在或已完成/已归档任务不可删除——均不快照直接返回（防垃圾快照挤占轮转）；
   // 权威防线在下方锁内 transform（返回 null 即拒绝），此处提前 return 同样不写盘不广播
-  const pre = readData();
+  let pre = null;
+  try {
+    pre = readData();
+  } catch (e) {
+    // 读取 IO 错误（权限/占用等）：放弃本次删除，绝不能基于错误状态继续
+    console.error('[WS] delete 预读数据失败，放弃本次删除:', e.message);
+    return;
+  }
   const preTask = pre.tasks.find(t => t.id === taskId);
   const preBug = preTask && preTask.bugs.find(b => b.id === bugId);
-  if (preBug && (preBug.status === '已完成' || preBug.archived === true)) return;
+  if (!preBug || preBug.status === '已完成' || preBug.archived === true) return;
 
-  snapshotBeforeDelete(); // 删除前快照：可回滚
+  snapshotBeforeDelete(); // 删除前快照：可回滚（仅确认目标存在后才执行）
   // 闭包收集被删 bug 的全部图片文件名（不放进 change，避免污染广播协议）
   const deletedImages = [];
   const result = await updateData((data) => {
@@ -526,6 +611,8 @@ async function handleDelete(ws, msg, _wss) {
     if (Array.isArray(task.bugs[index].images)) {
       deletedImages.push(...task.bugs[index].images);
     }
+    // 条目级备注引用的图片随条目一起清理（防孤儿文件）
+    collectNoteImages(task.bugs[index].notes, deletedImages);
     task.bugs.splice(index, 1);
     return { type: 'delete', taskId, bugId };
   });
@@ -541,12 +628,17 @@ async function handleDelete(ws, msg, _wss) {
 
 async function handleCreateTask(ws, msg, _wss) {
   const { task } = msg.data || {};
-  if (!task || !task.id) return;
+  // task.id 必须为非空字符串
+  if (!task || typeof task.id !== 'string' || !task.id) return;
+  // name 非 string 时走「新项目」默认（与客户端占位统一）；超长（>120）截断
+  const taskName = (typeof task.name === 'string' && task.name)
+    ? (task.name.length > 120 ? task.name.slice(0, 120) : task.name)
+    : '新项目';
 
   const result = await updateData((data) => {
     if (data.tasks.some(t => t.id === task.id)) return null;
-    data.tasks.push({ id: task.id, name: task.name || '新项目', bugs: [] });
-    return { type: 'createTask', task: { id: task.id, name: task.name || '新项目' } };
+    data.tasks.push({ id: task.id, name: taskName, bugs: [] });
+    return { type: 'createTask', task: { id: task.id, name: taskName } };
   });
 
   broadcastChange(_wss, msg.clientId, result);
@@ -556,9 +648,9 @@ async function handleUpdateTask(ws, msg, _wss) {
   const { taskId, field, value } = msg.data || {};
   if (!taskId || !field || value === undefined) return;
 
-  // 字段白名单 + 值校验：只允许 'name'，且 trim() 后非空（修复"空任务名可绕过"问题）
+  // 字段白名单 + 值校验：只允许 'name'，且 trim() 后非空（修复"空任务名可绕过"问题）、长度 ≤ 120
   // 放在 updateData 之前，尽早 return，避免无谓进锁
-  if (field !== 'name' || typeof value !== 'string' || value.trim() === '') return;
+  if (field !== 'name' || typeof value !== 'string' || value.trim() === '' || value.length > 120) return;
 
   const result = await updateData((data) => {
     const task = data.tasks.find(t => t.id === taskId);
@@ -574,7 +666,19 @@ async function handleDeleteTask(ws, msg, _wss) {
   const { taskId } = msg.data || {};
   if (!taskId) return;
 
-  snapshotBeforeDelete(); // 删除前快照：可回滚
+  // 防线预检：目标不存在或只剩最后一个任务时直接返回，不打快照（防垃圾快照挤占轮转）；
+  // 权威防线仍在锁内 transform（返回 null 即拒绝）
+  let pre = null;
+  try {
+    pre = readData();
+  } catch (e) {
+    // 读取 IO 错误（权限/占用等）：放弃本次删除，绝不能基于错误状态继续
+    console.error('[WS] deleteTask 预读数据失败，放弃本次删除:', e.message);
+    return;
+  }
+  if (pre.tasks.length <= 1 || !pre.tasks.some(t => t.id === taskId)) return;
+
+  snapshotBeforeDelete(); // 删除前快照：可回滚（仅确认目标存在后才执行）
   // 闭包收集该任务下所有图片文件名（不放进 change，避免污染广播协议）
   const deletedImages = [];
   const result = await updateData((data) => {
@@ -589,7 +693,10 @@ async function handleDeleteTask(ws, msg, _wss) {
       if (Array.isArray(bug.images)) {
         bug.images.forEach(img => deletedImages.push(img));
       }
+      collectNoteImages(bug.notes, deletedImages);
     });
+    // 任务级备注的图片也随任务一起清理
+    collectNoteImages(deletedTask.notes, deletedImages);
 
     data.tasks.splice(index, 1);
     return { type: 'deleteTask', taskId };
@@ -604,6 +711,14 @@ async function handleDeleteTask(ws, msg, _wss) {
 // 5.2 备注（note）操作 — 任务级与条目级合并（按 data.bugId 有无区分层级；
 //     change.type 仍分别为 addNote/addBugNote 等，WS 协议形态不变）
 // ================================================================
+
+/** 收集一个 notes 数组里引用的全部图片文件名（删除任务/条目时随宿主一起清理，防孤儿文件） */
+function collectNoteImages(notes, bucket) {
+  if (!Array.isArray(notes)) return;
+  notes.forEach(n => {
+    if (n && Array.isArray(n.images)) bucket.push(...n.images.filter(f => typeof f === 'string'));
+  });
+}
 
 /** 辅助：根据 taskId/bugId/noteId 逐级查找 task → bug → note */
 function findBugAndNote(tasks, taskId, bugId, noteId) {
@@ -630,14 +745,27 @@ function findNoteList(tasks, taskId, bugId) {
 
 async function handleAddNote(ws, msg, _wss) {
   const { taskId, bugId, note } = msg.data || {};
-  if (!taskId || !note || !note.id) return;
+  // note.id 必须为非空字符串
+  if (!taskId || !note || typeof note.id !== 'string' || !note.id) return;
 
   const result = await updateData((data) => {
     const notes = findNoteList(data.tasks, taskId, bugId);
     if (!notes || notes.some(n => n.id === note.id)) return null;
-    // 创建时间锚点（"已修改"判断）：旧客户端不带 createdAt 时补默认值
-    const normalized = { ...note };
-    if (typeof normalized.createdAt !== 'number') normalized.createdAt = normalized.updatedAt || Date.now();
+    // 不再 spread 信任整包：按备注 schema 白名单逐字段归一化（防脏字段入库）。
+    // - content 必须为字符串并截断（上限 4000，防超大备注）；
+    // - clientId 缺失时用 msg.clientId 兜底：updateNote/deleteNote 均校验
+    //   note.clientId === msg.clientId，缺失会导致该备注永远无人能改/删
+    const normalized = {
+      id: note.id,
+      clientId: (typeof note.clientId === 'string' && note.clientId)
+        ? note.clientId
+        : ((typeof msg.clientId === 'string' && msg.clientId) ? msg.clientId : '__unknown__'),
+      content: typeof note.content === 'string' ? note.content.slice(0, 4000) : '',
+      createdAt: typeof note.createdAt === 'number' ? note.createdAt : (typeof note.updatedAt === 'number' ? note.updatedAt : Date.now()),
+      updatedAt: typeof note.updatedAt === 'number' ? note.updatedAt : Date.now(),
+      ...(typeof note.authorName === 'string' && note.authorName ? { authorName: note.authorName } : {}),
+      images: Array.isArray(note.images) ? note.images.filter(x => typeof x === 'string') : [],
+    };
     notes.push(normalized);
     return bugId
       ? { type: 'addBugNote', taskId, bugId, note: { ...normalized } }
@@ -650,8 +778,10 @@ async function handleAddNote(ws, msg, _wss) {
 async function handleUpdateNote(ws, msg, _wss) {
   const { taskId, bugId, noteId, content, updatedAt, removeImage } = msg.data || {};
   if (!taskId || !noteId) return;
-  // 纯图片移除（removeImage 按文件名）也合法；content 与移除参数均缺省时拒绝
+  // 纯图片移除（removeImage 按文件名）也合法；content 与移除参数均缺省时拒绝；
+  // content 必须为字符串（防任意类型入库），截断上限 4000 与 addNote 一致
   if (content === undefined && removeImage === undefined) return;
+  if (content !== undefined && typeof content !== 'string') return;
 
   const removedNoteImages = []; // 闭包：广播后统一清理被移除的图片文件
   const result = await updateData((data) => {
@@ -664,7 +794,7 @@ async function handleUpdateNote(ws, msg, _wss) {
     // 全部未命中（如 removeImage 不在 images 中）→ return null，避免无效广播与版本递增
     let changed = false;
     if (content !== undefined) {
-      note.content = content;
+      note.content = content.slice(0, 4000);
       note.updatedAt = updatedAt || Date.now();
       changed = true;
     }
@@ -689,7 +819,23 @@ async function handleDeleteNote(ws, msg, _wss) {
   const { taskId, bugId, noteId } = msg.data || {};
   if (!taskId || !noteId) return;
 
-  snapshotBeforeDelete(); // 删除前快照：可回滚
+  // 防线预检：目标不存在或非作者本人时直接返回，不打快照（防垃圾快照挤占轮转）；
+  // 权威防线仍在锁内 transform（返回 null 即拒绝），此处提前 return 同样不写盘不广播
+  let pre = null;
+  try {
+    pre = readData();
+  } catch (e) {
+    // 读取 IO 错误（权限/占用等）：放弃本次删除，绝不能基于错误状态继续
+    console.error('[WS] deleteNote 预读数据失败，放弃本次删除:', e.message);
+    return;
+  }
+  {
+    const preNotes = findNoteList(pre.tasks, taskId, bugId);
+    const preNote = preNotes && preNotes.find(n => n.id === noteId);
+    if (!preNote || preNote.clientId !== msg.clientId) return;
+  }
+
+  snapshotBeforeDelete(); // 删除前快照：可回滚（仅确认目标存在且校验通过后执行）
   let deletedNoteImages = [];
   const result = await updateData((data) => {
     const notes = findNoteList(data.tasks, taskId, bugId);
@@ -712,7 +858,17 @@ async function handleDeleteNote(ws, msg, _wss) {
   if (result.change) deletedNoteImages.forEach(deleteImageFile);
 }
 
-function handleRequestSync(ws, _wss) {
+/** requestSync 最小间隔（毫秒）：防客户端高频刷全量同步（大数据下每次都要读盘+序列化） */
+const REQUEST_SYNC_MIN_INTERVAL = 500;
+
+function handleRequestSync(ws, _msg, _wss) {
+  // 形参对齐统一调用约定 handler(ws, msg, _wss)：中参是 msg、末参才是 _wss
+  // （此前误声明为 (ws, _wss)，_wss 实绑到 msg，clientCount 从未随 requestSync 发出）
+  // 速率限制：同一连接 500ms 内的重复 requestSync 直接忽略
+  const now = Date.now();
+  if (typeof ws._lastSyncAt === 'number' && now - ws._lastSyncAt < REQUEST_SYNC_MIN_INTERVAL) return;
+  ws._lastSyncAt = now;
+
   sendFullSync(ws);
   // 同时发送当前在线人数
   sendTo(ws, { type: 'clientCount', count: countOpenClients(_wss) });
@@ -743,6 +899,9 @@ async function handleMessage(ws, rawMessage, _wss) {
   } catch (e) {
     return;
   }
+  // 类型守卫：JSON.parse('null') 得 null，数组/字符串等原始值也没有 .type——
+  // 直接忽略，否则 WS_HANDLERS[msg.type] 处 TypeError 会崩掉进程
+  if (!msg || typeof msg !== 'object' || Array.isArray(msg)) return;
 
   const handler = WS_HANDLERS[msg.type];
   if (!handler) return;
@@ -756,7 +915,7 @@ async function handleMessage(ws, rawMessage, _wss) {
 // ================================================================
 // 4. HTTP 静态文件服务
 // ================================================================
-function serveStaticFile(res, filePath, cacheImmutable) {
+function serveStaticFile(res, filePath, cacheImmutable, isUpload) {
   const ext = path.extname(filePath).toLowerCase();
   const contentType = MIME_TYPES[ext] || 'application/octet-stream';
 
@@ -778,7 +937,14 @@ function serveStaticFile(res, filePath, cacheImmutable) {
       // uploads 图片文件名唯一且内容不可变 → 长缓存（浏览器缓存命中，二次查看/翻页秒开，消除"先模糊后清晰"的闪现）
       // 其他静态文件（html/js/css）保持 no-cache 便于开发即时更新
       const cacheControl = cacheImmutable ? 'public, max-age=31536000, immutable' : 'no-cache';
-      res.writeHead(200, { 'Content-Type': contentType, 'Cache-Control': cacheControl });
+      const headers = { 'Content-Type': contentType, 'Cache-Control': cacheControl };
+      if (isUpload) {
+        // uploads 内容（如 SVG）可含脚本：加 CSP sandbox + nosniff 防存储型 XSS（脚本被隔离无法执行），
+        // 不加 attachment（保留 <img> 内联展示）；仅对 /uploads/ 生效，public/ 自有资源不加避免影响页面
+        headers['Content-Security-Policy'] = "default-src 'none'; sandbox";
+        headers['X-Content-Type-Options'] = 'nosniff';
+      }
+      res.writeHead(200, headers);
       res.end(body);
     }
   });
@@ -824,6 +990,19 @@ function isSafeFilename(name) {
   if (name.includes('..') || name.includes('/') || name.includes('\\')) return false;
   if (name.length === 0 || name.length > 255) return false;
   return true;
+}
+
+/**
+ * 校验文件名并解析为 uploads 目录内的绝对路径（上传落盘 / 删除 / 静态服务共用）：
+ * isSafeFilename 拒绝穿越与分隔符 + path.resolve 后带 path.sep 前缀比较的双保险；
+ * 非法返回 null（调用方一律拒绝，不做清洗），杜绝 ..\..\ 逃出 uploads/ 读写删任意文件
+ */
+function resolveUploadPath(name) {
+  if (!isSafeFilename(name)) return null;
+  const base = path.resolve(UPLOADS_DIR);
+  const full = path.resolve(base, name);
+  if (!full.startsWith(base + path.sep)) return null; // 必须严格位于 uploads/ 目录内
+  return full;
 }
 
 /**
@@ -931,6 +1110,15 @@ async function handleUpload(req, res) {
 
       const { filename, declaredMime, fileBuffer } = parsed;
 
+      // 文件名校验（防路径穿越任意写）：拒绝而非清洗；超长文件名（>150 字符）一并拒绝
+      // （穿越名一旦入库，后续 deleteImageFile 会按名删除 → 升级为任意文件删除）
+      if (!isSafeFilename(filename) || filename.length > 150) {
+        console.log(`[Upload] ⚠️ 非法/超长文件名被拒绝: "${String(filename).substring(0, 60)}"`);
+        res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({ success: false, error: '非法的文件名' }));
+        return;
+      }
+
       // MIME 白名单校验
       if (declaredMime && !ALLOWED_MIME_TYPES.includes(declaredMime)) {
         res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
@@ -964,10 +1152,15 @@ async function handleUpload(req, res) {
         return;
       }
 
-      // 生成唯一文件名
+      // 生成唯一文件名（uuid 前缀 + 已过 isSafeFilename 的原始名；resolve 双保险确认落在 uploads/ 内）
       const uuid = crypto.randomUUID();
       const safeFilename = `${uuid}_${filename}`;
-      const filePath = path.join(UPLOADS_DIR, safeFilename);
+      const filePath = resolveUploadPath(safeFilename);
+      if (!filePath) {
+        res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({ success: false, error: '非法的文件名' }));
+        return;
+      }
 
       fs.writeFileSync(filePath, fileBuffer);
       console.log(`[Upload] 图片已保存: ${safeFilename} (${(fileBuffer.length / 1024).toFixed(1)} KB)`);
@@ -1186,22 +1379,23 @@ async function handleUpload(req, res) {
  */
 async function handleDeleteUpload(req, res, filename) {
   try {
-    // 路径穿越防护
-    if (!isSafeFilename(filename)) {
+    // 路径穿越防护（isSafeFilename + resolve 前缀双保险）
+    const filePath = resolveUploadPath(filename);
+    if (!filePath) {
       res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
       res.end(JSON.stringify({ success: false, error: '非法的文件名' }));
       return;
     }
 
-    snapshotBeforeDelete(); // 删除前快照：可回滚
-    const filePath = path.join(UPLOADS_DIR, filename);
-
-    // 确保文件在 uploads 目录内（二次防护）
-    if (!filePath.startsWith(UPLOADS_DIR)) {
-      res.writeHead(403, { 'Content-Type': 'application/json; charset=utf-8' });
-      res.end(JSON.stringify({ success: false, error: '禁止访问' }));
+    // 文件不存在直接 404：不打快照（防垃圾快照挤占轮转）、不动数据
+    if (!fs.existsSync(filePath)) {
+      console.log(`[Upload] 删除目标不存在: ${filename}`);
+      res.writeHead(404, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify({ success: false, error: '文件不存在' }));
       return;
     }
+
+    snapshotBeforeDelete(); // 删除前快照：可回滚（确认文件存在后才执行）
 
     // 先改数据：反查所有任务中 images 包含该 filename 的 bug，全部移除引用（返回首个 change 供广播）
     let result = null;
@@ -1221,36 +1415,29 @@ async function handleDeleteUpload(req, res, filename) {
             }
           }
         }
-        if (change) return change;
-        // 反查备注图片（混版本窗口兜底：旧客户端可能直接 DELETE 文件，其 data.json 中仍有引用）
-        // 先扫任务级备注的 images 多图数组，再扫条目级备注，命中即 splice 并返回快照 change 供广播
+        // 反查备注图片（混版本窗口兜底：旧客户端可能直接 DELETE 文件，其 data.json 中仍有引用）。
+        // 遍历清理【所有】任务级/条目级备注中的引用（旧实现 .find 只清第一条命中），首个命中作为广播 change
+        // （单条 change 为协议上限，其余引用的服务端清理经下次 fullSync 对齐，不新增消息类型）
+        const cleanNoteRef = (t, b, n) => {
+          let touched = false;
+          if (Array.isArray(n.images)) {
+            const ni = n.images.indexOf(filename);
+            if (ni !== -1) { n.images.splice(ni, 1); touched = true; }
+          }
+          if (n.image === filename) { n.image = null; touched = true; } // 旧单图字段兜底
+          if (touched && !change) {
+            change = b
+              ? { type: 'updateBugNote', taskId: t.id, bugId: b.id, noteId: n.id, images: [...(n.images || [])] }
+              : { type: 'updateNote', taskId: t.id, noteId: n.id, images: [...(n.images || [])] };
+          }
+        };
         for (const t of data.tasks) {
-          const tn = (t.notes || []).find(n =>
-            (Array.isArray(n.images) && n.images.includes(filename)) || n.image === filename);
-          if (tn) {
-            if (Array.isArray(tn.images)) {
-              const ti = tn.images.indexOf(filename);
-              if (ti !== -1) tn.images.splice(ti, 1);
-            }
-            if (tn.image === filename) tn.image = null;
-            return { type: 'updateNote', taskId: t.id, noteId: tn.id, images: [...(tn.images || [])] };
+          (t.notes || []).forEach(n => cleanNoteRef(t, null, n));
+          for (const b of (t.bugs || [])) {
+            (b.notes || []).forEach(n => cleanNoteRef(t, b, n));
           }
         }
-        for (const t of data.tasks) {
-          for (const b of t.bugs || []) {
-            const bn = (b.notes || []).find(n =>
-              (Array.isArray(n.images) && n.images.includes(filename)) || n.image === filename);
-            if (bn) {
-              if (Array.isArray(bn.images)) {
-                const bi = bn.images.indexOf(filename);
-                if (bi !== -1) bn.images.splice(bi, 1);
-              }
-              if (bn.image === filename) bn.image = null;
-              return { type: 'updateBugNote', taskId: t.id, bugId: b.id, noteId: bn.id, images: [...(bn.images || [])] };
-            }
-          }
-        }
-        return null;
+        return change;
       });
     } catch (assocErr) {
       // 数据反查/写盘失败：不删文件，返回 500（保持"先改数据、后删文件"）
@@ -1380,10 +1567,14 @@ function handleImportData(req, res) {
     const tasks = parsed.tasks.map(normalizeTaskForImport);
 
     // 统计引用但缺失的图片文件（提示用户需手动迁移 uploads/）
+    // 文件名经 resolveUploadPath 校验：穿越名一律计缺失，也绝不拿它去 uploads/ 之外探测文件存在性
     const referenced = new Set();
     tasks.forEach(t => (t.bugs || []).forEach(b => (b.images || []).forEach(f => referenced.add(f))));
     let missing = 0;
-    referenced.forEach(f => { if (!fs.existsSync(path.join(UPLOADS_DIR, f))) missing++; });
+    referenced.forEach(f => {
+      const p = resolveUploadPath(f);
+      if (!p || !fs.existsSync(p)) missing++;
+    });
 
     try {
       const result = await updateData((data) => {
@@ -1406,35 +1597,44 @@ function createHttpHandler() {
   const NODE_MODULES_DIR = path.join(__dirname, 'node_modules');
 
   return function handler(req, res) {
-    // 通用 CORS 头（支持跨 Electron 实例/跨浏览器访问）
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Bug-Id, X-Client-Id, X-Task-Id, X-Note-Id, X-Bug-Note-Id');
+    // 路由统一取去查询串后的路径，并去尾斜杠做精确匹配（防 /api/exportxxx 之类前缀误命中）
+    const routePath = req.url.split('?')[0].replace(/\/+$/, '') || '/';
 
     // API 路由：数据导出 / 导入
-    if (req.method === 'GET' && req.url.startsWith('/api/export')) {
+    // 注：前端/Electron 均同源访问（loadURL http://localhost:port），不再返回 CORS 通配头——
+    // 收紧跨站读取面：其他站点的 drive-by 页面无法跨域读取 /api/export 或 POST /api/import
+    if (req.method === 'GET' && routePath === '/api/export') {
       handleExportData(res);
       return;
     }
-    if (req.method === 'POST' && req.url.startsWith('/api/import')) {
+    if (req.method === 'POST' && routePath === '/api/import') {
       handleImportData(req, res);
       return;
     }
 
     // API 路由：图片上传
-    if (req.method === 'POST' && req.url.startsWith('/api/upload')) {
+    if (req.method === 'POST' && routePath === '/api/upload') {
       handleUpload(req, res);
       return;
     }
 
     // API 路由：图片删除
-    if (req.method === 'DELETE' && req.url.startsWith('/api/upload/')) {
-      const filename = decodeURIComponent(req.url.replace('/api/upload/', '').split('?')[0]);
+    if (req.method === 'DELETE' && routePath.startsWith('/api/upload/')) {
+      let filename = null;
+      try {
+        // 畸形百分号编码（如 DELETE /api/upload/%）会让 decodeURIComponent 抛 URIError：
+        // 捕获后按 400 拒绝，绝不能让异常冒泡崩掉进程
+        filename = decodeURIComponent(req.url.split('?')[0].slice('/api/upload/'.length));
+      } catch (e) {
+        res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({ success: false, error: '非法的文件名编码' }));
+        return;
+      }
       handleDeleteUpload(req, res, filename);
       return;
     }
 
-    // CORS 预检：响应 OPTIONS 请求（跨 Electron 实例/跨浏览器需要）
+    // CORS 预检：同源部署无需跨域，仅回 204、不返回任何 CORS 头
     if (req.method === 'OPTIONS') {
       res.writeHead(204);
       res.end();
@@ -1443,18 +1643,26 @@ function createHttpHandler() {
 
     // 上传文件路由：/uploads/ -> 数据目录（asar 外，可读写）
     if (req.url.startsWith('/uploads/')) {
-      const rawName = req.url.split('?')[0].replace('/uploads/', '');
-      const uploadFilename = decodeURIComponent(rawName);
-      const fullPath = path.join(UPLOADS_DIR, uploadFilename);
-      const fileExists = fs.existsSync(fullPath);
-      if (!fileExists) console.log(`[Static] 图片不存在: ${uploadFilename}`);
-      if (isSafeFilename(uploadFilename)) {
-        serveStaticFile(res, fullPath, true); // uploads 图片：长缓存（不可变）
-      } else {
+      let uploadFilename = null;
+      try {
+        // 畸形百分号编码（如 GET /uploads/%）：按 400 拒绝，不崩进程
+        uploadFilename = decodeURIComponent(req.url.split('?')[0].slice('/uploads/'.length));
+      } catch (e) {
+        console.log('[Static] ⚠️ 非法百分号编码的上传文件名请求被拒绝（400）');
+        res.writeHead(400, { 'Content-Type': 'text/plain; charset=utf-8' });
+        res.end('400 Bad Request');
+        return;
+      }
+      const fullPath = resolveUploadPath(uploadFilename);
+      if (!fullPath) {
         console.log(`[Static] ⚠️ 文件名不安全: "${uploadFilename}"`);
         res.writeHead(400, { 'Content-Type': 'text/plain; charset=utf-8' });
         res.end('400 Bad Request');
+        return;
       }
+      const fileExists = fs.existsSync(fullPath);
+      if (!fileExists) console.log(`[Static] 图片不存在: ${uploadFilename}`);
+      serveStaticFile(res, fullPath, true, true); // uploads 图片：长缓存（不可变）+ CSP sandbox 加固
       return;
     }
 
@@ -1468,7 +1676,8 @@ function createHttpHandler() {
     if (urlPath.startsWith('/vendor/')) {
       const vendorRelPath = '/' + urlPath.replace('/vendor/', '');
       const safeVendorPath = path.resolve(NODE_MODULES_DIR, '.' + path.normalize(vendorRelPath));
-      if (!safeVendorPath.startsWith(NODE_MODULES_DIR)) {
+      // 前缀比较带 path.sep：防未来出现 node_modules2/ 类同级目录被误放行
+      if (!safeVendorPath.startsWith(NODE_MODULES_DIR + path.sep)) {
         res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' });
         res.end('403 Forbidden');
         return;
@@ -1479,7 +1688,8 @@ function createHttpHandler() {
 
     // 安全检查：防止目录遍历
     const safePath = path.resolve(PUBLIC_DIR, '.' + path.normalize(urlPath));
-    if (!safePath.startsWith(PUBLIC_DIR)) {
+    // 前缀比较带 path.sep：防未来出现 public2/ 类同级目录被误放行
+    if (!safePath.startsWith(PUBLIC_DIR + path.sep)) {
       res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' });
       res.end('403 Forbidden');
       return;
@@ -1493,33 +1703,71 @@ function createHttpHandler() {
 // 6. 端口探测启动
 // ================================================================
 let _wss = null;
+let heartbeatTimer = null;
+
 function _createServer(port) {
   const httpServer = http.createServer(createHttpHandler());
-  _wss = new WebSocketServer({ server: httpServer });
+  // maxPayload：单条 WS 消息上限 10MB（防超大帧耗尽内存）
+  _wss = new WebSocketServer({ server: httpServer, maxPayload: 10 * 1024 * 1024 });
 
-  // 处理 WebSocket 服务器错误（避免未捕获异常）
+  // WebSocket 服务器级错误：记日志即可（端口占用等监听期错误由 httpServer 的 error 事件统一处理）
   _wss.on('error', (err) => {
-    // 错误由 httpServer 的 error 事件统一处理
+    console.error('[WS] 服务器错误:', err.message);
+  });
+
+  // WS 心跳：每 30s ping 一次（pong 自动回应）；连续 2 次未回应判定半开连接，terminate 清理
+  const HEARTBEAT_INTERVAL_MS = 30000;
+  if (heartbeatTimer) clearInterval(heartbeatTimer);
+  heartbeatTimer = setInterval(() => {
+    if (!_wss) return;
+    _wss.clients.forEach((client) => {
+      if (client.isAlive === false) {
+        client._missedPongs = (client._missedPongs || 0) + 1;
+        if (client._missedPongs >= 2) {
+          client.terminate(); // 连续 2 次未回应 pong：判定为死连接
+          return;
+        }
+      } else {
+        client._missedPongs = 0;
+      }
+      client.isAlive = false;
+      try { client.ping(); } catch (e) { /* 忽略 */ }
+    });
+  }, HEARTBEAT_INTERVAL_MS);
+  heartbeatTimer.unref(); // 不阻止进程自然退出
+  // HTTP 服务器关闭时同步清掉心跳（定时器生命周期与服务器绑定；否则 close 后残留的
+  // unref 定时器在 Windows/Node 24 下与某些嵌入方的退出路径组合会触发 libuv 退出断言）
+  httpServer.on('close', () => {
+    if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null; }
   });
 
   // WebSocket 连接处理
   _wss.on('connection', (ws) => {
     const clientId = crypto.randomUUID();
     ws.clientId = clientId;
+    ws.isAlive = true;
+    ws.on('pong', () => { ws.isAlive = true; });
 
-    // 新连接发送全量同步
-    const data = readData();
-    sendTo(ws, {
-      type: 'fullSync',
-      data,
-      version: data.version,
-    });
+    // 新连接发送全量同步（读取 IO 失败只记日志，不影响连接建立）
+    try {
+      const data = readData();
+      sendTo(ws, {
+        type: 'fullSync',
+        data,
+        version: data.version,
+      });
+    } catch (e) {
+      console.error('[WS] 新连接全量同步失败:', e.message);
+    }
 
     // 广播在线人数
     broadcastClientCount(_wss);
 
     ws.on('message', (raw) => {
-      handleMessage(ws, raw.toString(), _wss);
+      // 兜底 catch：任何消息处理异常只记日志，绝不因未捕获 rejection 崩溃进程
+      handleMessage(ws, raw.toString(), _wss).catch((err) => {
+        console.error('[WS] 消息处理未捕获错误:', err && err.stack ? err.stack : err);
+      });
     });
 
     ws.on('close', () => {
@@ -1532,14 +1780,74 @@ function _createServer(port) {
   });
 
   return new Promise((resolve, reject) => {
+    // 探测失败轮次（如 EADDRINUSE）：关闭本轮创建的 httpServer/WSS，避免句柄泄漏后再试下一端口
+    const onListenError = (err) => {
+      try { _wss.close(); } catch (e) { /* 忽略 */ }
+      try { httpServer.close(() => {}); } catch (e) { /* 忽略 */ }
+      reject(err);
+    };
+    httpServer.once('error', onListenError);
+
     httpServer.listen(port, BIND_ADDR, () => {
+      // 监听成功：移除探测期 once 监听，换成长期 error 日志监听
+      // （旧实现 resolve 后 error 事件无监听，进程会因未捕获 'error' 直接退出）
+      httpServer.removeListener('error', onListenError);
+      httpServer.on('error', (err) => {
+        console.error(`[Server] HTTP 服务器错误 (port=${port}):`, err.message);
+      });
       resolve({ httpServer, _wss, port });
     });
-
-    httpServer.once('error', (err) => {
-      reject(err);
-    });
   });
+}
+
+// ================================================================
+// 7. 跨进程实例锁（防双实例互踩：端口自动 +1 会让第二个实例照常启动，整文件互相覆盖 data.json）
+// ================================================================
+const LOCK_FILE = path.join(DATA_ROOT, 'data.lock');
+let instanceLockAcquired = false;
+
+/** pid 对应进程是否存活（kill(pid,0) 探测；EPERM 表示进程存在但无权限，同样视为存活） */
+function isPidAlive(pid) {
+  try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; }
+}
+
+/**
+ * 获取跨进程实例锁（O_EXCL 独占创建 data.lock 并写入 pid）。
+ * 已存在且持有者仍存活 → 明确报错退出；持有者已死（残留锁）→ 删除后继续。
+ * 失败抛错，由调用方（startServer / main）中止启动。
+ */
+function acquireInstanceLock() {
+  if (instanceLockAcquired) return;
+  let fd;
+  try {
+    fd = fs.openSync(LOCK_FILE, 'wx');
+  } catch (err) {
+    if (err.code !== 'EEXIST') throw err;
+    // 锁文件已存在：读取 pid 判断持有者是否仍存活
+    let holderPid = NaN;
+    try { holderPid = Number(String(fs.readFileSync(LOCK_FILE, 'utf-8')).trim()); } catch (e) { /* 空/不可读按残留处理 */ }
+    if (Number.isInteger(holderPid) && holderPid > 0 && isPidAlive(holderPid)) {
+      throw new Error(`数据目录已被另一个实例锁定 (pid=${holderPid})：${LOCK_FILE}。请先关闭正在运行的实例——双开会互相覆盖 data.json。`);
+    }
+    // 残留锁（持有者已退出/崩溃未清理）：删除后重新获取
+    console.warn(`[Lock] 发现残留实例锁（pid=${holderPid} 已不存活），自动清理: ${LOCK_FILE}`);
+    try { fs.unlinkSync(LOCK_FILE); } catch (e) { /* 忽略 */ }
+    fd = fs.openSync(LOCK_FILE, 'wx');
+  }
+  fs.writeFileSync(fd, String(process.pid), 'utf-8');
+  fs.closeSync(fd);
+  instanceLockAcquired = true;
+  console.log(`[Lock] 实例锁已获取: ${LOCK_FILE} (pid=${process.pid})`);
+}
+
+/** 释放实例锁（进程退出时调用；先校验锁内容仍是本进程 pid，避免误删他人锁） */
+function releaseInstanceLock() {
+  if (!instanceLockAcquired) return;
+  try {
+    const holderPid = Number(String(fs.readFileSync(LOCK_FILE, 'utf-8')).trim());
+    if (holderPid === process.pid) fs.unlinkSync(LOCK_FILE);
+  } catch (e) { /* 忽略 */ }
+  instanceLockAcquired = false;
 }
 
 /**
@@ -1551,29 +1859,53 @@ function _createServer(port) {
 async function startServer(initialPort) {
   const startPort = initialPort || INITIAL_PORT;
 
-  for (let port = startPort; port <= MAX_PORT; port++) {
-    try {
-      const result = await _createServer(port);
-      console.log(`服务器已启动: http://${BIND_ADDR}:${result.port}`);
-
-      const ips = getLocalIPs();
-      if (ips.length > 0) {
-        console.log('局域网访问地址:');
-        ips.forEach((ip) => {
-          console.log(`  http://${ip}:${result.port}`);
-        });
-      }
-      return result;
-    } catch (err) {
-      if (err.code === 'EADDRINUSE') {
-        console.log(`端口 ${port} 被占用，尝试下一个...`);
-        continue;
-      }
-      throw err;
-    }
+  // 起始端口超出探测范围时给出准确错误（旧实现循环一次不进，会报出 (4000-3070) 之类反向区间的误导文案）
+  if (!Number.isInteger(startPort) || startPort < 0 || startPort > MAX_PORT) {
+    throw new Error(`起始端口 ${startPort} 超出可用探测范围 (0-${MAX_PORT})，无法启动。`);
   }
 
-  throw new Error(`所有端口 (${startPort}-${MAX_PORT}) 均被占用，无法启动。`);
+  // 跨进程实例锁：双开时第二个实例明确报错退出（正常退出/信号终止时自动释放；强杀残留由下次启动按 pid 清理）
+  acquireInstanceLock();
+  process.once('exit', releaseInstanceLock);
+  for (const sig of ['SIGINT', 'SIGTERM']) {
+    process.once(sig, () => { releaseInstanceLock(); process.exit(0); });
+  }
+
+  // 启动预读一次 data.json：损坏时立即进入只读保护模式并醒目告警（而非等到首个请求才暴露）；
+  // IO 错误（权限/占用）仅记录——后续读写路径各自处理，绝不写空数据
+  try { readData(); } catch (e) {
+    console.error('[Data] ⚠️ 启动预读 data.json 失败（IO 错误）:', e.message);
+  }
+
+  try {
+    for (let port = startPort; port <= MAX_PORT; port++) {
+      try {
+        const result = await _createServer(port);
+        console.log(`服务器已启动: http://${BIND_ADDR}:${result.port}`);
+
+        const ips = getLocalIPs();
+        if (ips.length > 0) {
+          console.log('局域网访问地址:');
+          ips.forEach((ip) => {
+            console.log(`  http://${ip}:${result.port}`);
+          });
+        }
+        return result;
+      } catch (err) {
+        if (err.code === 'EADDRINUSE') {
+          console.log(`端口 ${port} 被占用，尝试下一个...`);
+          continue;
+        }
+        throw err;
+      }
+    }
+  } catch (err) {
+    releaseInstanceLock(); // 启动失败：释放实例锁，不残留
+    throw err;
+  }
+
+  releaseInstanceLock(); // 探测耗尽仍未成功：同样释放
+  throw new Error(`端口 ${startPort}-${MAX_PORT} 范围内所有端口均被占用，无法启动。`);
 }
 
 module.exports = { startServer };

@@ -8,16 +8,20 @@ on:
 
 jobs:
   test:
-    name: 集成测试 (Node ${{ matrix.node-version }})
-    runs-on: ubuntu-latest
+    name: 集成测试 (${{ matrix.os }} / Node ${{ matrix.node-version }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
+        # ubuntu 只覆盖服务端逻辑；windows 追加覆盖 Windows 专属路径（路径分隔符、postinstall 的 csc 编译等）
+        os: [ubuntu-latest, windows-latest]
         node-version: [18.x, 20.x]
     env:
       # 集成测试自带临时 BUGLIST_DATA_ROOT；此处再兜一层，避免任何路径写到用户目录
       BUGLIST_DATA_ROOT: ${{ runner.temp }}/buglist-ci-data
       # 测试跑的是纯 node 服务端 + ws 客户端，不需要 Electron 桌面二进制，跳过下载提速
+      # （打包冒烟是独立 job，不继承此变量——打包需要 Electron 二进制）
       ELECTRON_SKIP_BINARY_DOWNLOAD: 1
     steps:
       - uses: actions/checkout@v4
@@ -27,3 +31,17 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm test
+
+  # 打包冒烟：仅 Windows（portable exe 目标）；需下载 Electron 二进制，故不设 ELECTRON_SKIP_BINARY_DOWNLOAD
+  build:
+    name: 打包冒烟 (windows)
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20.x
+          cache: npm
+      - run: npm ci
+      - run: npm run build

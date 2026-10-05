@@ -5,7 +5,7 @@ release/
 # 历史打包目录（pack814 / pack15 / packTEST 等）
 pack*/
 build-log.txt
-# 7za 代理每次 npm install 由 postinstall 重新编译，不入库
+# 7za 代理由 postinstall 用 .NET Framework csc 现场编译（build/setup-7za-proxy.js），不入库
 build/7za-proxy.exe
 
 # 代码签名证书（私钥材料，绝不入库；如需签名用 CSC_LINK / CSC_KEY_PASSWORD 环境变量）

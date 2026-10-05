@@ -51,7 +51,7 @@ npm install && npm start
 # 浏览器打开 http://局域网IP:3050
 ```
 
-- **Windows 便携版**：`npm run build` → `dist/任务清单.exe`，发给同事双击即用
+- **Windows 便携版**：`npm run build` → `dist/bianqian-<版本>-win-x64.exe`（如 `bianqian-0.3.0-win-x64.exe`，命名由 `electron-builder.yml` 的 `artifactName` 决定，版本号随 `package.json`），发给同事双击即用
 - **桌面版**：`npm run electron`（托盘常驻、单实例、应用图标）
 
 ## 🧰 技术栈

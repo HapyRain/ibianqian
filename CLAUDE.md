@@ -12,12 +12,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 npm start                  # 纯 Web 启动（打印局域网地址，3050–3070 自动探测）
 npm run dev                # node --watch 热重载
 npm run electron           # Electron 壳调试（内嵌同一个 server.js，托盘常驻）
-npm run build              # electron-builder 打便携 exe → dist/任务清单.exe
-npm test                   # 依次跑 6 个集成套件（任一失败即中断；共 133 项断言）
+npm run build              # electron-builder 打便携 exe → dist/bianqian-<版本>-win-x64.exe（命名见 electron-builder.yml 的 artifactName）
+npm test                   # 依次跑 12 个集成套件（任一失败即中断；共 260 项断言）
 node test/test-validation-guards.js   # 跑单个测试（test/test-*.js 都是独立 node 脚本，共用工具在 test/helpers.js）
 ```
 
-没有 lint / formatter / 单元测试框架；测试是手写集成脚本（起真实 server + ws 客户端断言）。打包卡二进制下载时设 `ELECTRON_BUILDER_BINARIES_MIRROR="https://npmmirror.com/mirrors/electron-builder-binaries/"`。CI 见 `.github/workflows/ci.yml`（push / PR 到 main → Node 18.x + 20.x 跑 `npm ci` + `npm test`）。
+没有 lint / formatter / 单元测试框架；测试是手写集成脚本（起真实 server + ws 客户端断言）。打包卡二进制下载时设 `ELECTRON_BUILDER_BINARIES_MIRROR="https://npmmirror.com/mirrors/electron-builder-binaries/"`。CI 见 `.github/workflows/ci.yml`（push / PR 到 main → ubuntu/windows × Node 18.x + 20.x 跑 `npm ci` + `npm test`；windows 另有打包冒烟 job 跑 `npm run build`）。
 
 ⚠️ **沙箱下写临时验证脚本**：Node 的 `child_process` 管道 stdio 会 EPERM（命名管道受限）——不要在 `node -e` / 脚本里 `execFileSync('git'…)` 或 `spawn(..., {stdio:'pipe'})`；改用 PowerShell 先把命令输出落文件、Node 只 `readFileSync`（另：PowerShell 的 `Out-File` 带 BOM，JSON 解析前先 `replace(/^\uFEFF/,'')`）。验证脚本 spawn 服务后必须 `try/finally` kill。
 
@@ -25,8 +25,8 @@ node test/test-validation-guards.js   # 跑单个测试（test/test-*.js 都是�
 
 **没有构建步骤**：前端是原生三件套（`public/index.html` + `app.js` + `style.css` + `themes.js`），Vue 3 与 Element Plus 通过 `/vendor/*` 路由直接映射到 `node_modules/`（离线本地化）。改 `public/` 下文件刷新即生效，无需任何编译。
 
-- **`server.js`（1499 行，单文件）**：HTTP + WebSocket 服务端合一，无框架、无数据库。入口 `startServer()`（底部直接执行；也 `module.exports` 供 Electron 与测试 require）。所有消息进 `handleMessage()` 分发。图片上传是手写 multipart 解析 + MIME 白名单 + 魔数校验。
-- **`public/app.js`（3544 行）**：Vue 3 应用逻辑（WS 客户端、身份、多图、备注、动画）。
+- **`server.js`（~1920 行，单文件）**：HTTP + WebSocket 服务端合一，无框架、无数据库。入口 `startServer()`（底部直接执行；也 `module.exports` 供 Electron 与测试 require）。所有消息进 `handleMessage()` 分发。图片上传是手写 multipart 解析 + MIME 白名单 + 魔数校验。
+- **`public/app.js`（3909 行）**：Vue 3 应用逻辑（WS 客户端、身份、多图、备注、动画）。
 - **`public/themes.js`**：13 套主题 + `buildThemeCss` 生成器（17 色变量 → 派生色 + Element Plus 联动）。
 - **`electron/main.js`**：托盘、单实例锁、IPC；通过 `require('../server')` 内嵌同一个服务端。
 
@@ -44,9 +44,10 @@ node test/test-validation-guards.js   # 跑单个测试（test/test-*.js 都是�
 ## 关键机制
 
 - **同步模型**：任何修改 → 服务端写盘 → WS 广播 → 全员一致。三层防循环：`originClientId` 过滤 → `isLocalChange` 标记 → 新旧值比对。WS 消息类型见 DEVELOPMENT.md「架构与数据流」。
-- **持久化**：Promise 队列锁 + 原子写入（tmp → rename）；`transformFn` 返回 null 则不写盘不涨版本号。
+- **持久化**：Promise 队列锁 + 原子写入（tmp → fsync → rename，rename 失败 50ms 重试一次）；`transformFn` 返回 null 则不写盘不涨版本号。
+- **写路径防线（改 server.js 必知）**：data.json 损坏（解析失败/结构非法）→ 自动备份 `.corrupted.*` 并进入**只读保护模式**，一切写入抛错拒绝（绝不以空数据覆盖真实数据），人工恢复后重启解除；跨进程**实例锁** `data.lock`（O_EXCL + pid 探活）防双开互踩；WS 侧有畸形帧守卫、心跳清半开连接、requestSync 500ms 限速、字段白名单/长度校验；文件名统一过 `resolveUploadPath`（isSafeFilename + resolve 前缀双保险），HTTP 不再返回 CORS 通配头（同源部署）。
 - **端口探测**：`EADDRINUSE` 自动 +1，上限 3070；起始端口可被 `BUGLIST_PORT` 覆盖（自动化验证用）。
-- **字段归一化**：`handleAdd` / 导入用 `{ ...bug }` 展开入库——非法字段会被原样带进 data.json，新增字段必须**显式归一化**（合法写入规范值，非法则 `delete normalizedBug.xxx`），参照 `assignee` / `deadline` 的既有范式。
+- **字段归一化**：`handleAdd` / 导入仍用 `{ ...bug }` 展开入库——非法字段会被原样带进 data.json，新增字段必须**显式归一化**（合法写入规范值，非法则 `delete normalizedBug.xxx`），参照 `assignee` / `deadline` 的既有范式；备注（`handleAddNote`）已改为按 schema 白名单逐字段入库，新加备注字段须同步扩白名单。
 - **验证脚本**：spawn 服务后必须 try/finally kill 子进程，否则残留进程占住 3050 端口，后续验证连到旧进程得出假结果。
 
 ## 易踩的坑（完整版见 DEVELOPMENT.md「避坑索引」）

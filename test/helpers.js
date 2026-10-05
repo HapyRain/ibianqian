@@ -1,7 +1,8 @@
 /**
- * 集成测试公共脚手架 —— 5 个起服务的测试（validation-guards / image-lifecycle /
- * note-image / note-ownership / archive-guards）共享；test-template-guard.js 是纯静态
- * 检查、不起服务，不用本模块。
+ * 集成测试公共脚手架 —— 10 个起服务的测试套件共享（validation-guards / image-lifecycle /
+ * note-image / note-ownership / archive-guards / crash-hardening / delete-task /
+ * sync-basics / export-import / completed-at）；test-template-guard.js 与
+ * test-protocol-consistency.js 是纯静态检查、不起服务，不用本模块。
  *
  * ⚠️ 关键：本模块在 **require 时** 即以副作用创建临时数据目录并设置
  * `process.env.BUGLIST_DATA_ROOT`。server.js 在 require 时就计算 DATA_ROOT，因此
@@ -30,6 +31,22 @@ const exitCode = () => (failed > 0 ? 1 : 0);
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const readData = () => JSON.parse(fs.readFileSync(DATA_FILE, 'utf-8'));
+
+/**
+ * 轮询等待条件成立（默认上限 5s、间隔 50ms），替代"固定大 sleep"以降低 CI flake：
+ * 条件通常为"磁盘 data.json 出现预期状态"或"客户端收到预期消息"。
+ * 返回条件最后一次求值的真值（条件返回对象时可直接拿到该对象，超时返回 falsy），
+ * 由调用方 assert 判定，本函数不抛错。
+ */
+async function waitFor(condition, timeoutMs = 5000, intervalMs = 50) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const value = condition();
+    if (value) return value;
+    await sleep(intervalMs);
+  }
+  return condition();
+}
 function listUploads() {
   try { return fs.readdirSync(UPLOADS_DIR); } catch (e) { return []; }
 }
@@ -140,7 +157,7 @@ function onFatal(err) {
 
 module.exports = {
   DATA_ROOT, DATA_FILE, UPLOADS_DIR,
-  assert, sleep, readData, listUploads, countBroadcasts, PNG_BUFFER,
+  assert, sleep, waitFor, readData, listUploads, countBroadcasts, PNG_BUFFER,
   connectWS, httpUpload, httpDeleteUpload,
   teardown, rmDataRoot, onFatal, getCounts, exitCode,
 };

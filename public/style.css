@@ -591,20 +591,30 @@ body {
 @keyframes panelSwipeLeft{from{transform:translateX(-40px);opacity:.35}to{transform:translateX(0);opacity:1}}
 
 /* ============================================================
-   搜索条（卡片头部，单独一行）
+   内联搜索框（筛选栏右侧，胶囊式幽灵输入框，不独占一行）
    ============================================================ */
-.bug-panel .search-bar {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 12px 16px;
-  background: var(--surface-hi);
-  border-bottom: 1px solid var(--line-soft);
-  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+.search-inline {
+  flex: 1 1 180px;
+  max-width: 300px;
+  min-width: 150px;
+  margin-left: auto;
 }
-.search-input-big { flex: 1; }
-.search-input-big .el-input__wrapper { border-radius: 10px; }
-.search-icon { width: 15px; height: 15px; color: var(--text-2); }
+.search-inline .el-input__wrapper {
+  border-radius: var(--radius-pill);
+  /* 用文字色派生中性底/描边：深浅主题自动反转，避免硬编码白色在暗色下成灰白块 */
+  background: rgba(var(--text-rgb), 0.045);
+  backdrop-filter: blur(8px);
+  box-shadow: 0 0 0 1px rgba(var(--text-rgb), 0.1) inset;
+  padding-left: 10px;
+  transition: box-shadow var(--transition-fast), background var(--transition-fast);
+}
+.search-inline .el-input__wrapper:hover { box-shadow: 0 0 0 1px rgba(var(--primary-rgb), 0.4) inset; }
+.search-inline .el-input__wrapper.is-focus {
+  background: rgba(var(--text-rgb), 0.07);
+  box-shadow: 0 0 0 1px var(--primary) inset;
+}
+.search-inline .el-input__inner { font-size: 0.84rem; height: 26px; line-height: 26px; }
+.search-icon { width: 14px; height: 14px; color: var(--text-2); }
 
 /* 列表头：筛选 + 新增任务（横线之下，与任务行一体） */
 .list-head {
@@ -1255,6 +1265,38 @@ body {
   z-index: 1;
 }
 
+/* 第二步副标题：返回按钮 + 已选模式标签 */
+.startup-subtitle:has(.startup-back-btn) {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+}
+
+/* 返回重选模式：幽灵小按钮，不与对话框关闭按钮混淆 */
+.startup-back-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px 10px 3px 6px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--text-2);
+  font-size: 0.78rem;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+.startup-back-btn:hover {
+  color: var(--primary);
+  border-color: var(--primary);
+  background: var(--primary-soft);
+}
+.startup-back-btn .icon { width: 12px; height: 12px; }
+
+/* 已选模式标签 */
+.startup-mode-chosen { font-weight: 600; color: var(--text); }
+
 .startup-mode-buttons {
   display: flex;
   flex-wrap: wrap; /* 卡片放不下自然换行堆叠，替代 ≤768 的 column 硬切（spec 第 5 节） */
@@ -1271,9 +1313,9 @@ body {
   align-items: center;
   gap: clamp(5px, 1.5vh, 8px);
   padding: clamp(12px, 4.5vh, 28px) 16px;
-  border: 1px solid rgba(0, 0, 0, 0.08);
+  border: 1px solid var(--line);
   border-radius: var(--radius);
-  background: rgba(0, 0, 0, 0.02);
+  background: var(--surface);
   cursor: pointer;
   transition: all var(--transition);
 }
@@ -1324,11 +1366,12 @@ body {
 .startup-address-input {
   flex: 1;
   padding: 11px 14px;
-  border: 1px solid rgba(0, 0, 0, 0.12);
+  border: 1px solid var(--line);
   border-radius: var(--radius-sm);
   font-size: 0.95rem;
   outline: none;
-  background: rgba(0, 0, 0, 0.02);
+  /* 对话框底是 --surface-hi，输入框用 --surface + --line 拉开层次（深浅主题都可读） */
+  background: var(--surface);
   color: var(--text);
   font-family: 'Inter', inherit;
   transition: all var(--transition-fast);
@@ -1337,7 +1380,6 @@ body {
 .startup-address-input:focus {
   border-color: var(--primary);
   box-shadow: 0 0 0 3px rgba(var(--primary-rgb), 0.1);
-  background: var(--surface-hi);
 }
 
 .startup-address-input::placeholder {
@@ -1748,7 +1790,7 @@ body {
    打印样式
    ============================================================ */
 @media print {
-  .search-bar,
+  .search-inline,
   .list-head,
   .app-footer {
     display: none !important;

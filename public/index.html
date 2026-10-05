@@ -52,51 +52,64 @@
           <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
         </button>
         <h2 class="startup-title"><svg class="icon icon-logo" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="2" width="16" height="20" rx="2"/><path d="M9 2v3h6V2"/><circle cx="12" cy="14" r="2"/><path d="M10 14l-1.5 1.5"/><path d="M13 13.5l2 2"/></svg> 欢迎使用 任务清单</h2>
-        <p class="startup-subtitle">请选择启动模式</p>
-        <div class="startup-mode-buttons">
-          <button class="startup-btn startup-btn-server" @click="selectMode('server')">
-            <span class="startup-btn-icon"><svg class="icon icon-server" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="8" rx="2.5"/><rect x="3" y="13" width="18" height="7" rx="2.5"/><path d="M7 8h.01M7 16.5h.01M10.5 8h4M10.5 16.5h4"/></svg></span>
-            <span class="startup-btn-label">作为服务器</span>
-            <span class="startup-btn-desc">本机存储数据，其他人连接你</span>
-          </button>
-          <button class="startup-btn startup-btn-client" @click="selectMode('client')">
-            <span class="startup-btn-icon"><svg class="icon icon-link" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="13" rx="2.5"/><path d="M9 21h6M12 17v4"/></svg></span>
-            <span class="startup-btn-label">作为客户端</span>
-            <span class="startup-btn-desc">连接到其他人的服务器</span>
-          </button>
-        </div>
-        <!-- 你的名字：用于备注署名（仅存本机，不进服务器数据） -->
-        <div class="startup-name-row">
-          <label class="startup-input-label"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 21c1.6-4.2 4.6-6.2 8-6.2s6.4 2 8 6.2"/></svg> 你的名字（用于备注署名）</label>
-          <input
-            class="startup-address-input"
-            v-model="displayName"
-            placeholder="例如：张三"
-            maxlength="20"
-          />
-        </div>
-        <!-- 客户端模式：输入服务器地址 -->
-        <div class="startup-client-form" v-if="startupMode === 'client'">
-          <label class="startup-input-label">请输入服务器地址</label>
-          <div class="startup-input-row">
-            <input
-              class="startup-address-input"
-              v-model="startupAddressInput"
-              placeholder="例如 192.168.1.100:3050"
-              @keyup.enter="confirmClientMode"
-            />
-            <button class="startup-confirm-btn" @click="confirmClientMode" :disabled="!startupAddressInput.trim() || !displayName.trim()">
-              确认连接
+        <!-- 第一步：仅选择启动模式 -->
+        <template v-if="startupStep === 1">
+          <p class="startup-subtitle">请选择启动模式</p>
+          <div class="startup-mode-buttons">
+            <button class="startup-btn startup-btn-server" @click="selectMode('server')">
+              <span class="startup-btn-icon"><svg class="icon icon-server" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="8" rx="2.5"/><rect x="3" y="13" width="18" height="7" rx="2.5"/><path d="M7 8h.01M7 16.5h.01M10.5 8h4M10.5 16.5h4"/></svg></span>
+              <span class="startup-btn-label">作为服务器</span>
+              <span class="startup-btn-desc">本机存储数据，其他人连接你</span>
+            </button>
+            <button class="startup-btn startup-btn-client" @click="selectMode('client')">
+              <span class="startup-btn-icon"><svg class="icon icon-link" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="13" rx="2.5"/><path d="M9 21h6M12 17v4"/></svg></span>
+              <span class="startup-btn-label">作为客户端</span>
+              <span class="startup-btn-desc">连接到其他人的服务器</span>
             </button>
           </div>
-        </div>
-        <!-- 服务器模式：显示启动成功 -->
-        <div class="startup-server-success" v-if="startupMode === 'server'">
-          <div class="startup-success-icon"><svg class="icon icon-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M8 12l3 3 5-5"/></svg></div>
-          <p>服务已启动，其他客户端可连接到：</p>
-          <p class="startup-server-addr">{{ locationHost }}:{{ locationPort }}</p>
-          <button class="startup-confirm-btn" @click="confirmServerMode" :disabled="!displayName.trim()">进入</button>
-        </div>
+        </template>
+        <!-- 第二步：按所选模式填写信息（可返回重选；提交与校验仍在最后的进入/连接按钮） -->
+        <template v-else>
+          <p class="startup-subtitle">
+            <button class="startup-back-btn" @click="backToModeSelect" title="返回重新选择模式">
+              <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg>
+              <span>重新选择</span>
+            </button>
+            <span class="startup-mode-chosen">{{ startupMode === 'server' ? '作为服务器' : '作为客户端' }}</span>
+          </p>
+          <!-- 你的名字：用于备注署名（仅存本机，不进服务器数据） -->
+          <div class="startup-name-row">
+            <label class="startup-input-label"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 21c1.6-4.2 4.6-6.2 8-6.2s6.4 2 8 6.2"/></svg> 你的名字（用于备注署名）</label>
+            <input
+              class="startup-address-input"
+              v-model="displayName"
+              placeholder="例如：张三"
+              maxlength="20"
+            />
+          </div>
+          <!-- 客户端模式：输入服务器地址 -->
+          <div class="startup-client-form" v-if="startupMode === 'client'">
+            <label class="startup-input-label">请输入服务器地址</label>
+            <div class="startup-input-row">
+              <input
+                class="startup-address-input"
+                v-model="startupAddressInput"
+                placeholder="例如 192.168.1.100:3050"
+                @keyup.enter="confirmClientMode"
+              />
+              <button class="startup-confirm-btn" @click="confirmClientMode" :disabled="!startupAddressInput.trim() || !displayName.trim()">
+                确认连接
+              </button>
+            </div>
+          </div>
+          <!-- 服务器模式：显示启动成功（对钩在名字填写后出现） -->
+          <div class="startup-server-success" v-if="startupMode === 'server'">
+            <div class="startup-success-icon" v-if="displayName.trim()"><svg class="icon icon-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M8 12l3 3 5-5"/></svg></div>
+            <p>服务已启动，其他客户端可连接到：</p>
+            <p class="startup-server-addr">{{ locationHost }}:{{ locationPort }}</p>
+            <button class="startup-confirm-btn" @click="confirmServerMode" :disabled="!displayName.trim()">进入</button>
+          </div>
+        </template>
       </div>
     </div>
 
@@ -192,15 +205,7 @@
       <div class="bug-panel">
       <!-- 吸顶区（搜索 + 筛选/新增）：页面滚动时固定在视口顶部；项目栏/顶栏随页面滚走 -->
       <div class="panel-sticky" :class="{ 'is-stuck': stickyStuck }">
-      <!-- 搜索条：单独一行 -->
-      <div class="search-bar">
-        <el-input v-model="searchText" size="large" clearable placeholder="搜索任务名称…" class="search-input-big">
-          <template #prefix>
-            <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
-          </template>
-        </el-input>
-      </div>
-      <!-- 筛选 + 新增任务 -->
+      <!-- 筛选 + 内联搜索 + 新增任务 -->
       <div class="list-head">
         <div class="filter-buttons">
           <el-button
@@ -220,6 +225,12 @@
             </svg><span class="btn-sort-label">{{ sortDesc ? '倒序' : '正序' }}</span>
           </el-button>
         </div>
+        <!-- 内联搜索：与筛选同行，胶囊式幽灵输入框（留白处，不独占一行） -->
+        <el-input v-model="searchText" size="small" clearable placeholder="搜索任务名称…" class="search-inline">
+          <template #prefix>
+            <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
+          </template>
+        </el-input>
         <el-button class="btn-add-task" @click="addBug" :disabled="!currentTaskId" title="新增任务">
           <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.5"/><path d="M12 8.5v7M8.5 12h7"/></svg><span class="btn-label">新增任务</span>
         </el-button>

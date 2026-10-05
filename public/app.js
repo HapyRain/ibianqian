@@ -562,18 +562,42 @@
 
       // ==================== 用户身份（本地持久化，不进服务器数据） ====================
       const IDENTITY_KEY = 'buglist_identity';
+      /** 旧版共享 clientId 的认领标记：浏览器多标签页按页隔离 id 后，旧 id 只允许被第一个升级的标签页继承一次 */
+      const LEGACY_CLAIM_KEY = 'buglist_legacy_clientid_claimed';
       let identity = null;
       try {
         identity = JSON.parse(localStorage.getItem(IDENTITY_KEY));
         if (!identity || !identity.clientId) identity = null;
       } catch (e) { identity = null; }
-      /** 显示名（响应式，供启动对话框输入） */
+      /** 显示名（响应式，供启动对话框输入；仍存 localStorage，跨标签页共享） */
       const displayName = ref(identity?.displayName || '');
 
       /** 身份版本号（clientId 被替换时自增，驱动 shortClientId 等重算） */
       const identityVersion = ref(0);
 
-      /** 确保存在稳定 clientId：Electron 用 MAC 哈希，浏览器回退持久化 uuid */
+      let clientId = identity?.clientId || randomUUID();
+      // 浏览器路径：clientId 按标签页隔离（存 sessionStorage），防同机两页互相把对方变更当"自己的"过滤掉；
+      // Electron 路径：维持设备级共享，首次进入时由 ensureClientId 以 MAC 派生值替换
+      if (!window.electronAPI?.getMacId) {
+        try {
+          const saved = sessionStorage.getItem(IDENTITY_KEY);
+          if (saved) {
+            clientId = saved; // 本标签页此前已生成/继承过隔离 id
+          } else if (identity?.clientId && !localStorage.getItem(LEGACY_CLAIM_KEY)) {
+            // 一次性迁移：旧版共享 clientId 仅由第一个升级的标签页继承（保历史备注编辑权），随后上认领标记
+            localStorage.setItem(LEGACY_CLAIM_KEY, '1');
+            sessionStorage.setItem(IDENTITY_KEY, clientId);
+          } else {
+            // 旧 id 已被认领或本就不存在：生成新隔离 id，并补落认领标记（防本页 id 写回 localStorage 后被后续标签页再继承）
+            clientId = randomUUID();
+            try { localStorage.setItem(LEGACY_CLAIM_KEY, '1'); } catch (e2) { /* 忽略 */ }
+            sessionStorage.setItem(IDENTITY_KEY, clientId);
+          }
+        } catch (e) { /* sessionStorage/localStorage 不可用（如隐私模式）：退化为页面内共享占位 id */ }
+      }
+      // 同步占位保证 shortClientId 等渲染安全（clientId 永不为 null），替换发生在任何连接建立之前
+
+      /** 确保存在稳定 clientId：Electron 用 MAC 哈希；浏览器已在上方按标签页隔离完毕 */
       async function ensureClientId() {
         if (identity && identity.clientId) return identity.clientId;
         let cid = null;
@@ -587,10 +611,6 @@
         try { localStorage.setItem(IDENTITY_KEY, JSON.stringify(identity)); } catch (e) { /* 忽略 */ }
         return cid;
       }
-
-      let clientId = identity?.clientId || randomUUID();
-      // 同步占位保证 shortClientId 等渲染安全（clientId 永不为 null）；
-      // 首次进入时由 ensureClientId 以 MAC 派生值替换，替换发生在任何连接建立之前
 
       /** WebSocket 实例 */
       let ws = null;
@@ -680,6 +700,9 @@
 
       /** 当前选择的模式: null | 'server' | 'client' */
       const startupMode = ref(null);
+
+      /** 对话框步骤：1=选择模式，2=按模式填写信息 */
+      const startupStep = ref(1);
 
       /** 客户端模式下的地址输入 */
       const startupAddressInput = ref('');
@@ -884,6 +907,7 @@
           disconnectReason.value = null;
           allowReconnect = true;
           reconnectAttempts = 0;
+          syncRequested = false; // 新连接上旧的在途同步请求已作废
           // 先补发离线期间的暂存消息（服务端依次处理），再请求全量同步拿最新状态
           if (pendingQueue.length) {
             const n = pendingQueue.length;
@@ -911,20 +935,20 @@
           // 断开时立即备份一次，确保最新数据不丢失
           doBackupNow();
 
-          // 防抖：5 秒内重复触发忽略，避免提示闪烁
+          // 防抖：5 秒内重复触发只抑制 UI 重复提示（避免提示闪烁），绝不跳过重连排定——
+          // 否则窗口内二次断开（如服务器重启数秒）会导致重连链永久断裂
           const now = Date.now();
-          if (now - lastOnCloseTime < 5000) {
-            return;
+          if (now - lastOnCloseTime >= 5000) {
+            lastOnCloseTime = now;
+            connectionStatus.value = 'disconnected';
+
+            if (!allowReconnect) {
+              // 保存的地址连接失败：不静默重连，显示错误提示让用户手动修改地址
+              disconnectReason.value = '连接失败，服务器端口可能已变更，请联系服务端确认地址';
+            }
           }
-          lastOnCloseTime = now;
-
-          connectionStatus.value = 'disconnected';
-
-          if (!allowReconnect) {
-            // 保存的地址连接失败：不静默重连，显示错误提示让用户手动修改地址
-            disconnectReason.value = '连接失败，服务器端口可能已变更，请联系服务端确认地址';
-          } else {
-            scheduleReconnect();
+          if (allowReconnect) {
+            scheduleReconnect(); // 无论是否在防抖窗口内都必须排定；内部有 reconnectTimer 去重，重复调用幂等
           }
         };
 
@@ -967,8 +991,19 @@
         }
       }
 
+      /** 全量同步请求在途标记：防定位未命中路径在广播风暴下反复发 requestSync（配合服务端限速） */
+      let syncRequested = false;
+
+      /** 请求全量同步（在途去重：已有请求未返回则跳过；fullSync 到达或重连成功时复位） */
+      function requestSyncOnce() {
+        if (syncRequested) return;
+        syncRequested = true;
+        sendMessage({ type: 'requestSync', clientId });
+      }
+
       /**
        * 发送更新消息
+       * @param {string} [taskId] 动作发起时定格的项目 id；异步回调里勿依赖默认值（回调时刻的 currentTaskId 可能已变）
        */
       function sendUpdate(bugId, field, value, taskId = currentTaskId.value) {
         sendMessage({
@@ -994,12 +1029,13 @@
 
       /**
        * 发送删除消息
+       * @param {string} [taskId] 动作发起时定格的项目 id；异步回调里勿依赖默认值（回调时刻的 currentTaskId 可能已变）
        */
-      function sendDelete(bugId) {
+      function sendDelete(bugId, taskId = currentTaskId.value) {
         sendMessage({
           type: 'delete',
           clientId,
-          data: { taskId: currentTaskId.value, bugId },
+          data: { taskId, bugId },
         });
       }
 
@@ -1029,6 +1065,7 @@
        */
       function handleFullSync(msg) {
         archiveExpanded.value = false; // 全量同步收起归档展开（裁决⑥）
+        syncRequested = false; // 在途的全量同步请求已应答
         if (msg.data && Array.isArray(msg.data.tasks)) {
           // 合并式应用：保留在途编辑的对象引用，避免输入框绑定对象被整体替换导致内容丢失
           const incomingTasks = msg.data.tasks;
@@ -1058,7 +1095,13 @@
               const isBugNotesOpen = bugNotesVisible.value && bugNotesTaskId.value === t.id && bugNotesBugId.value === b.id;
               if (isEditingBug || isBugNotesOpen) {
                 const localBug = localTask.bugs.find(lb => lb.id === b.id);
-                return localBug || { ...b };
+                if (!localBug) return { ...b };
+                // 保留引用的同时同步服务器重打的时间戳，避免本地自填的本机时钟与服务端永久漂移
+                ['completedAt', 'statusChangedAt', 'archivedAt'].forEach(k => {
+                  if (b[k] === undefined || b[k] === null) delete localBug[k];
+                  else localBug[k] = b[k];
+                });
+                return localBug;
               }
               return { ...b };
             });
@@ -1150,13 +1193,13 @@
       }
 
       /**
-       * 广播定位公共路径：本地找不到 task（或 bug）＝状态漂移 → 请求全量同步并返回 null
+       * 广播定位公共路径：本地找不到 task（或 bug）＝状态漂移 → 请求全量同步（在途去重）并返回 null
        */
       function locateTask(taskId, who) {
         const task = tasks.value.find(t => t.id === taskId);
         if (!task) {
           console.log(`[WS] ${who}: taskId=${taskId?.substring(0, 8)} 未找到，请求全量同步`);
-          sendMessage({ type: 'requestSync', clientId });
+          requestSyncOnce();
         }
         return task || null;
       }
@@ -1166,7 +1209,7 @@
         const bug = task.bugs.find(b => b.id === bugId);
         if (!bug) {
           console.log(`[WS] ${who}: bugId=${bugId} 在 taskId=${taskId?.substring(0, 8)} 中未找到，请求全量同步`);
-          sendMessage({ type: 'requestSync', clientId });
+          requestSyncOnce();
           return null;
         }
         return { task, bug };
@@ -1201,9 +1244,14 @@
           return;
         }
 
-        console.log(`[WS] handleRemoteUpdate: taskId=${taskId?.substring(0,8)}, bugId=${bugId}, ${field}=${value} (旧值=${bug[field]})`);
-        bug[field] = value;
-        if (field === 'status') triggerStatusIconAnim(bug);
+        // 编辑保护：本页正在编辑该行名称时跳过 name 字段覆盖（防输入中的内容被远端广播原地重置），其余字段照常
+        if (field === 'name' && editingBugId.value === bug.id) {
+          console.log(`[WS] handleRemoteUpdate: bugId=${bugId} name 正在编辑中，跳过覆盖`);
+        } else {
+          console.log(`[WS] handleRemoteUpdate: taskId=${taskId?.substring(0,8)}, bugId=${bugId}, ${field}=${value} (旧值=${bug[field]})`);
+          bug[field] = value;
+          if (field === 'status') triggerStatusIconAnim(bug);
+        }
 
         // 同步 completedAt 时间锚点
         if (completedAt !== undefined) {
@@ -1388,12 +1436,14 @@
        * 服务器地址变更 → 持久化 → 断开旧连接 → 连接新服务器
        */
       function onServerChange(newHost) {
+        newHost = (newHost || '').trim(); // 入口 trim：防手滑空格进连接/持久化链路
         if (!newHost || newHost === serverHost.value) return;
         serverHost.value = newHost;
 
         // 持久化到 localStorage
         try {
           localStorage.setItem('buglist_server_host', newHost);
+          hasSavedPrefs.value = true;
         } catch (e) { /* 静默忽略 */ }
 
         // 重置防抖计数器，恢复自动重连逻辑
@@ -1539,6 +1589,7 @@
        * 1s 后再真正改状态（行被滤除时已透明缩小，移除不可感知）
        */
       function flyRowToTag(bug, rowEl, newStatus) {
+        const targetTaskId = currentTaskId.value; // 定格发起时的项目 id，防 1s 飞行期间切项目致广播发往错项目（审查#2）
         const r = rowEl.getBoundingClientRect();
         // 目标 = 目标状态 tag 按钮（按钮顺序：全部, 待修复, 修复中, 已完成 → 按序号取，不依赖属性）
         let dx = 0, dy = 0;
@@ -1590,14 +1641,18 @@
           pendingFlashStatus = newStatus;
           clearTimeout(pendingFlashTimer);
           pendingFlashTimer = setTimeout(() => { pendingFlashStatus = null; }, 800);
-          bug.status = newStatus;
-          bug.statusChangedAt = Date.now(); // 新来的往组末尾
-          if (newStatus === '已完成') {
-            bug.completedAt = formatTimestamp(new Date());
-          } else if (bug.completedAt !== undefined) {
-            delete bug.completedAt;
+          // 飞行期间可能经历 fullSync（对象换成副本）或切项目：按 id 在定格项目里重查活对象，找不到就放弃本地变更（服务端仍会广播权威态）
+          const live = tasks.value.find(t => t.id === targetTaskId)?.bugs.find(b => b.id === bug.id);
+          if (live) {
+            live.status = newStatus;
+            live.statusChangedAt = Date.now(); // 新来的往组末尾
+            if (newStatus === '已完成') {
+              live.completedAt = formatTimestamp(new Date());
+            } else if (live.completedAt !== undefined) {
+              delete live.completedAt;
+            }
+            sendUpdate(live.id, 'status', newStatus, targetTaskId);
           }
-          sendUpdate(bug.id, 'status', newStatus);
           if (rowEl.isConnected) {
             rowEl.style.height = '';
             rowEl.style.minHeight = '';
@@ -1725,6 +1780,11 @@
         nextTick(() => {
           // 聚焦输入框（自定义行列表：.bug-name 单元格）
           const inputs = document.querySelectorAll('.bug-name .el-input__inner');
+          if (!inputs.length) {
+            // 找不到输入框（行已被筛选/动画移除等）：复位编辑态，避免 editingBugId 悬挂挡住远端 name 广播
+            editingBugId.value = null;
+            return;
+          }
           inputs.forEach((input) => {
             input.focus();
             input.select();
@@ -1742,6 +1802,12 @@
         editingBugId.value = null;
         // 值无变化则跳过（含空标题直接回车：不提交也不引面板）
         if (bug.name === editNameBackup) return;
+        // 名字 trim 后为空：恢复原名并提示，不允许把名称清空
+        if (!bug.name.trim()) {
+          bug.name = editNameBackup;
+          ElementPlus.ElMessage.warning('任务名称不能为空');
+          return;
+        }
         sendUpdate(bug.id, 'name', bug.name);
         if (openNext && bug.name.trim()) openNextStep(bug);
       }
@@ -1774,6 +1840,10 @@
           statusChangedAt: Date.now(), // 组内排序依据：新来的往组末尾
           assignee: { clientId: clientId, name: assigneeName || null },
         };
+
+        // 新行固定"待修复"且名称为空：筛选/搜索视图下会被隐藏 → 复位视图保证新行可见（审查#7）
+        statusFilter.value = '全部';
+        searchText.value = '';
 
         task.bugs.push(newBug);
 
@@ -1965,6 +2035,12 @@
         if (dyingBugId.value || fadingBugId.value) return; // 重入守卫：已有删除动画进行中
         const task = currentTask.value;
         if (!task) return;
+        // 发送前复核：行可能已被远端改为已完成/归档（服务端会拒删，spec 第 7 节），本地不发起以免假删除
+        if (bug.status === '已完成' || bug.archived === true) {
+          confirmBugId.value = null; // 幕布淡出
+          ElementPlus.ElMessage.warning(bug.archived === true ? '该任务已归档，不能删除' : '该任务已完成，不能删除');
+          return;
+        }
         confirmBugId.value = null; // 幕布淡出
 
         // 仅剩一行（含筛选后可见仅一行）：渐隐淡出
@@ -1992,16 +2068,27 @@
        * finish 有 done 守卫，双路径只会执行一次。
        */
       function finalizeDeleteAfter(bug, { prop, fallbackMs }) {
+        const targetTaskId = currentTaskId.value; // 定格发起时的项目 id，防动画期间切项目致删除发往错项目（审查#2）
         let done = false;
         const finish = () => {
           if (done) return;
           done = true;
           const rowEl = rowElementOf(bug.id);
           if (rowEl) rowEl.removeEventListener('transitionend', onEnd);
-          const task2 = currentTask.value;
-          const idx = (task2 && task2.bugs) ? task2.bugs.findIndex(b => b.id === bug.id) : -1;
-          if (idx !== -1) task2.bugs.splice(idx, 1);
-          sendDelete(bug.id);
+          // 动画期间可能经历 fullSync（bugs 换成副本）或切项目：按 id 在定格项目里重查活对象（审查#2）
+          const task2 = tasks.value.find(t => t.id === targetTaskId);
+          const idx = task2 ? task2.bugs.findIndex(b => b.id === bug.id) : -1;
+          if (idx !== -1) {
+            // 二次复核：动画期间被远端改为已完成/归档 → 服务端会拒删，本地放弃并提示
+            const live = task2.bugs[idx];
+            if (live.status === '已完成' || live.archived === true) {
+              ElementPlus.ElMessage.warning(live.archived === true ? '该任务已归档，不能删除' : '该任务已完成，不能删除');
+            } else {
+              task2.bugs.splice(idx, 1);
+              sendDelete(bug.id, targetTaskId);
+            }
+          }
+          // 活对象已不存在：远端已删或项目已换，不再发送（fullSync 会带来权威态）
           dyingBugId.value = null;
           fadingBugId.value = null;
         };
@@ -2226,6 +2313,7 @@
        * 任务备注 - 编辑键盘事件（Enter 确认，Shift+Enter 换行）
        */
       function onTaskNoteEditKeydown(e, note) {
+        if (e.isComposing || e.keyCode === 229) return; // IME 组合输入中的 Enter 不触发确认（防拼音上屏误提交）
         if (e.key === 'Enter' && !e.shiftKey) {
           e.preventDefault();
           confirmEditTaskNote(note);
@@ -2236,6 +2324,7 @@
        * 任务备注 - 新增键盘事件（Enter 发送，Shift+Enter 换行）
        */
       function onTaskNoteNewKeydown(e) {
+        if (e.isComposing || e.keyCode === 229) return; // IME 组合输入中的 Enter 不触发发送
         if (e.key === 'Enter' && !e.shiftKey) {
           e.preventDefault();
           addNoteWithImage(newNoteContent.value);
@@ -2250,7 +2339,12 @@
        */
       function addNote(content, images, noteId) {
         const task = notesDialogTask.value;
-        if (!task || !content.trim()) return;
+        if (!task) {
+          // 弹窗打开期间任务可能已被远端删除：明确提示而非静默失败
+          ElementPlus.ElMessage.warning('该任务已被删除，无法添加备注');
+          return;
+        }
+        if (!content.trim()) return;
         if (!task.notes) task.notes = [];
 
         const note = {
@@ -2273,7 +2367,12 @@
        */
       async function addNoteWithImage(content) {
         const task = notesDialogTask.value;
-        if (!task || !content.trim()) return;
+        if (!task) {
+          // 弹窗打开期间任务可能已被远端删除：明确提示而非静默失败（键盘入口实际走这里）
+          ElementPlus.ElMessage.warning('该任务已被删除，无法添加备注');
+          return;
+        }
+        if (!content.trim()) return;
         let images = null;
         let noteId = null;
         const files = pendingNoteFiles.value;
@@ -2769,6 +2868,7 @@
       }
 
       function onBugNoteEditKeydown(e, note) {
+        if (e.isComposing || e.keyCode === 229) return; // IME 组合输入中的 Enter 不触发确认（防拼音上屏误提交）
         if (e.key === 'Enter' && !e.shiftKey) {
           e.preventDefault();
           confirmEditBugNote(note);
@@ -2776,6 +2876,7 @@
       }
 
       function onBugNoteNewKeydown(e) {
+        if (e.isComposing || e.keyCode === 229) return; // IME 组合输入中的 Enter 不触发发送
         if (e.key === 'Enter' && !e.shiftKey) {
           e.preventDefault();
           addBugNoteWithImage(newBugNoteContent.value);
@@ -3073,9 +3174,16 @@
         if (e.currentTarget) {
           e.currentTarget.classList.remove('drag-over');
         }
-        const file = e.dataTransfer.files[0];
-        if (file) {
-          handleImageUpload(file, bugId);
+        const files = e.dataTransfer.files;
+        if (!files || !files.length) return;
+        // 批量预判（与 onFileSelect 同规则）："已有数 + 本次拖入数 > 6" 整批拦截；其余逐个顺序上传全部
+        const bug = currentTask.value?.bugs?.find((b) => b.id === bugId);
+        if (bug && (bug.images || []).length + files.length > 6) {
+          ElementPlus.ElMessage.warning('单条任务最多 6 张截图');
+          return;
+        }
+        for (let i = 0; i < files.length; i++) {
+          handleImageUpload(files[i], bugId);
         }
       }
 
@@ -3092,6 +3200,7 @@
             e.preventDefault();
             const blob = item.getAsFile();
             if (blob) {
+              if (pastePreviewUrl.value) URL.revokeObjectURL(pastePreviewUrl.value); // 替换前释放上一张预览，防句柄泄漏
               pasteBlob.value = blob;
               pastePreviewUrl.value = URL.createObjectURL(blob);
             }
@@ -3319,6 +3428,7 @@
        */
       async function selectMode(mode) {
         startupMode.value = mode;
+        startupStep.value = 2; // 进入第二步：按模式填写信息
         if (mode === 'server') {
           // 服务器模式：获取本机局域网 IP 显示给用户
           if (window.electronAPI?.getLocalIp) {
@@ -3329,11 +3439,20 @@
           }
         } else if (mode === 'client') {
           // 客户端模式：预填上次保存的地址
-          const saved = localStorage.getItem('buglist_server_host');
-          if (saved) {
-            startupAddressInput.value = saved;
-          }
+          try {
+            const saved = (localStorage.getItem('buglist_server_host') || '').trim();
+            if (saved) {
+              startupAddressInput.value = saved;
+            }
+          } catch (e) { /* 存储不可用（如隐私模式）：保持空输入 */ }
         }
+      }
+
+      /**
+       * 返回第一步重选模式：保留已填的名字/地址，仅回到模式选择
+       */
+      function backToModeSelect() {
+        startupStep.value = 1;
       }
 
       /**
@@ -3348,12 +3467,16 @@
 
         const addr = startupAddressInput.value.trim();
         if (!addr) { ElementPlus.ElMessage.warning('请输入服务器地址'); return; }
-        // 保存地址
-        localStorage.setItem('buglist_server_host', addr);
-        // 保存模式偏好（下次跳过对话框）
-        localStorage.setItem('buglist_mode', 'client');
+        // 保存地址 + 模式偏好（下次跳过对话框）；存储只是偏好，隐私模式下写失败不阻断连接流程
+        try {
+          localStorage.setItem('buglist_server_host', addr);
+          localStorage.setItem('buglist_mode', 'client');
+          hasSavedPrefs.value = true;
+        } catch (e) { /* 忽略 */ }
         // 更新 serverHost
         serverHost.value = addr;
+        // 连回原服务器则恢复重选模式前备份的离线编辑队列，换服务器则丢弃
+        restorePendingQueueIfSameHost(addr);
         // 关闭对话框并连接
         showStartupDialog.value = false;
         connectWebSocket();
@@ -3369,10 +3492,15 @@
         identity = { clientId: clientId, displayName: displayName.value };
         try { localStorage.setItem(IDENTITY_KEY, JSON.stringify(identity)); } catch (e) { /* 忽略 */ }
 
-        // 保存模式偏好
-        localStorage.setItem('buglist_mode', 'server');
+        // 保存模式偏好（存储只是偏好，隐私模式下写失败不阻断连接流程）
+        try {
+          localStorage.setItem('buglist_mode', 'server');
+          hasSavedPrefs.value = true;
+        } catch (e) { /* 忽略 */ }
         // 连接 localhost
         serverHost.value = location.host;
+        // 连回原服务器则恢复重选模式前备份的离线编辑队列，换服务器则丢弃
+        restorePendingQueueIfSameHost(location.host);
         showStartupDialog.value = false;
         connectWebSocket();
       }
@@ -3387,14 +3515,16 @@
           showStartupDialog.value = true;
           return;
         }
-        const savedMode = localStorage.getItem('buglist_mode');
+        let savedMode = null;
+        try { savedMode = localStorage.getItem('buglist_mode'); } catch (e) { /* 存储不可用：视为无偏好 */ }
         if (savedMode === 'server') {
           // 已选过服务器模式，直接连接本地
           serverHost.value = location.host;
           connectWebSocket();
         } else if (savedMode === 'client') {
           // 已选过客户端模式，用保存的地址连接
-          const savedHost = localStorage.getItem('buglist_server_host');
+          let savedHost = null;
+          try { savedHost = (localStorage.getItem('buglist_server_host') || '').trim(); } catch (e) { /* 忽略 */ }
           if (savedHost) {
             serverHost.value = savedHost;
           }
@@ -3405,6 +3535,17 @@
         }
       }
 
+      /** 重选启动模式期间的离线编辑队列备份：{ queue, host }；最终连回同一台服务器则恢复，换服务器则丢弃 */
+      let pendingQueueBackup = null;
+
+      /** 恢复重选模式前备份的离线编辑队列（仅当最终连接的地址与原服务器相同——队列里的操作只对原服务器有意义） */
+      function restorePendingQueueIfSameHost(host) {
+        if (pendingQueueBackup && pendingQueueBackup.host === host) {
+          pendingQueue = pendingQueueBackup.queue;
+        }
+        pendingQueueBackup = null;
+      }
+
       /**
        * 重新选择启动模式：仅显示对话框，不删除已保存的偏好
        */
@@ -3412,26 +3553,31 @@
         // 不再删除 localStorage 中的模式/地址：误点"重新选择启动模式"不应丢配置。
         // 仅在用户确认新模式/新地址时（confirmClientMode / confirmServerMode）才覆盖。
         disconnectReason.value = null; // 重置模式后清掉旧的断线原因文案
+        // 备份离线编辑队列再断连（disconnect 会清空队列）：连回原服务器则恢复，换服务器则丢弃（审查#6）
+        if (pendingQueue.length) pendingQueueBackup = { queue: pendingQueue, host: serverHost.value };
         disconnect(); // 断连复用 disconnect：清重连定时器 + 待发队列，onclose 已摘除不自动重连
         showStartupDialog.value = true;
         startupMode.value = null;
+        startupStep.value = 1; // 对话框重新打开时回到第一步（模式选择）
         startupAddressInput.value = (function () {
-          try { return localStorage.getItem('buglist_server_host') || ''; } catch (e) { return ''; }
+          try { return (localStorage.getItem('buglist_server_host') || '').trim(); } catch (e) { return ''; }
         })();
         connectionStatus.value = 'disconnected';
       }
 
-      /** 是否已有保存的模式偏好（首次启动无偏好时不允许关闭对话框，否则无法进入应用） */
-      const hasSavedPrefs = computed(() => {
+      /** 是否已有保存的模式偏好（首次启动无偏好时不允许关闭对话框，否则无法进入应用）；写偏好处同步刷新 */
+      const hasSavedPrefs = ref((function () {
         try { return !!(localStorage.getItem('buglist_mode') || localStorage.getItem('buglist_server_host')); } catch (e) { return false; }
-      });
+      })());
 
       /** 关闭启动对话框，回到清单页并恢复原有连接 */
       async function cancelStartup() {
         await ensureClientId();
         showStartupDialog.value = false;
         startupMode.value = null;
+        startupStep.value = 1;
         startupAddressInput.value = '';
+        restorePendingQueueIfSameHost(serverHost.value); // 地址未被改动，自然走"相同→恢复"分支
         connectWebSocket(); // serverHost.value 未被改动，自动连回原服务器
       }
 
@@ -3471,6 +3617,10 @@
         window.removeEventListener('resize', updW);
         window.removeEventListener('scroll', onWinScroll);
         if (scrollRafId) { cancelAnimationFrame(scrollRafId); scrollRafId = 0; }
+        if (backupTimer) {
+          clearInterval(backupTimer); // 30s 本地备份定时器随组件销毁清理
+          backupTimer = null;
+        }
         if (reconnectTimer) {
           clearTimeout(reconnectTimer);
           reconnectTimer = null;
@@ -3505,11 +3655,13 @@
         winClose,
         toggleAlwaysOnTop,
         startupMode,
+        startupStep,
         startupAddressInput,
         displayName,
         locationHost,
         locationPort,
         selectMode,
+        backToModeSelect,
         confirmClientMode,
         confirmServerMode,
         resetStartupMode,

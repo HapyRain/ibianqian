@@ -13,12 +13,12 @@
 | 技术栈 | Node.js + ws + Vue3 + Element Plus（/vendor/ 本地化）+ Electron |
 | 怎么跑 | `npm start` → 浏览器开 `http://局域网IP:3050`（3050–3070 自动探测；`BUGLIST_PORT` 可覆盖起始端口） |
 | 数据在哪 | **`D:\Bug清单\{用户名}\data.json`**（不在项目目录！根目录 `data.json` 是旧种子文件；`BUGLIST_DATA_ROOT` 可覆盖） |
-| 桌面版 | `npm run electron` 调试；`npm run build` 打包 → `dist/任务清单.exe` |
-| 分发 | 直接把 `dist/任务清单.exe` 发给同事，双击即用（win-unpacked/ 为免安装文件夹版） |
+| 桌面版 | `npm run electron` 调试；`npm run build` 打包 → `dist/bianqian-<版本>-win-x64.exe`（如 `bianqian-0.3.0-win-x64.exe`） |
+| 分发 | 直接把 `dist/bianqian-<版本>-win-x64.exe` 发给同事，双击即用（win-unpacked/ 为免安装文件夹版） |
 
 **三条最关键的事实：**
 1. **同步模型**：任何修改 → WebSocket 广播 → 全员实时一致。三层防循环：`originClientId` 过滤 → `isLocalChange` 标记 → 新旧值比对。
-2. **持久化**：`data.json` 原子写入（tmp + rename）+ Promise 队列锁；数据目录默认 `D:\Bug清单\{用户名}`（环境变量 `BUGLIST_DATA_ROOT` 可覆盖）。
+2. **持久化**：`data.json` 原子写入（tmp + fsync + rename）+ Promise 队列锁 + 损坏只读保护 + 跨进程实例锁；数据目录默认 `D:\Bug清单\{用户名}`（环境变量 `BUGLIST_DATA_ROOT` 可覆盖）。
 3. **文档滞后于代码**：`docs/archive/HANDOFF.md`、`docs/archive/project-summary.md`（均为 7/7 旧版，已归档）都已过时——多项目、备注、备份、启动模式选择、更名"任务清单"等均未入档。**以本文 + 代码为准**（过时点见文末）。
 
 ---
@@ -55,11 +55,11 @@
 ## 🚀 快速启动
 
 ```bash
-npm install          # postinstall 会自动装 7za 代理（build/setup-7za-proxy.js）
+npm install          # postinstall 会自动编译并安装 7za 代理（build/setup-7za-proxy.js，用 .NET Framework csc；失败时还原原版 7za 并跳过）
 npm start            # 纯 Web：起服务，打印局域网访问地址
 npm run dev          # node --watch 热重载
 npm run electron     # Electron 壳（内嵌服务器，托盘常驻）
-npm run build        # electron-builder 打便携 exe → dist/任务清单.exe
+npm run build        # electron-builder 打便携 exe → dist/bianqian-<版本>-win-x64.exe
 ```
 
 - 打包若卡在二进制下载，先设国内镜像：`ELECTRON_BUILDER_BINARIES_MIRROR="https://npmmirror.com/mirrors/electron-builder-binaries/"`（详见 `docs/archive/HANDOFF.md` 第三节）。
@@ -72,7 +72,7 @@ npm run build        # electron-builder 打便携 exe → dist/任务清单.exe
 ## ✅ 测试与 CI
 
 ```bash
-npm test                              # 依次跑 6 个集成套件（任一失败即中断，退出码非 0）
+npm test                              # 依次跑 12 个集成套件（任一失败即中断，退出码非 0）
 node test/test-archive-guards.js      # 单跑一个套件（test/test-*.js 都是独立 node 脚本）
 ```
 
@@ -84,9 +84,15 @@ node test/test-archive-guards.js      # 单跑一个套件（test/test-*.js 都�
 | `test-note-ownership.js` | 12 项：备注归属权限（他人备注不可删改） |
 | `test-template-guard.js` | 1 项：`index.html` 无自闭合自定义元素（`<el-* />` 防线） |
 | `test-archive-guards.js` | 16 项：归档状态机 + 已完成/已归档拒删 + 导入归一化 |
+| `test-crash-hardening.js` | 28 项：WS 畸形帧守卫、畸形编码/路径穿越 4xx、上传穿越拒绝落盘核查、data.json 损坏只读保护 |
+| `test-delete-task.js` | 27 项：deleteTask 任务级删除（bug/备注图片随宿主清理、快照恰 +1、不存在/缺参/最后任务拒删无副作用） |
+| `test-sync-basics.js` | 26 项：fullSync 形状契约、requestSync 数据一致 + clientCount 伴随、500ms 限速窗口 |
+| `test-export-import.js` | 20 项：/api/export 全量一致性、/api/import（missingImages 统计、全端广播、格式防呆、空 tasks 行为） |
+| `test-completed-at.js` | 16 项：completedAt/statusChangedAt 时间锚点（写入/清除/严格递增/广播携带） |
+| `test-protocol-consistency.js` | 10 项：WS 协议静态契约（发送侧↔接收侧、广播侧↔处理侧双向一致） |
 
 - 所有套件通过 `BUGLIST_DATA_ROOT` 指向临时目录隔离数据，**不碰** `D:\Bug清单\`；共用启动与断言工具在 `test/helpers.js`。
-- **CI**（`.github/workflows/ci.yml`）：push / PR 到 `main` 触发，Node **18.x + 20.x** 双版本矩阵跑 `npm ci` + `npm test`；设 `ELECTRON_SKIP_BINARY_DOWNLOAD=1` 跳过 Electron 二进制下载（测试只用到纯 node 服务端 + ws）。
+- **CI**（`.github/workflows/ci.yml`）：push / PR 到 `main` 触发，测试矩阵 = **ubuntu + windows** × Node 18.x/20.x 跑 `npm ci` + `npm test`；设 `ELECTRON_SKIP_BINARY_DOWNLOAD=1` 跳过 Electron 二进制下载（测试只用到纯 node 服务端 + ws）；另有一个 windows **打包冒烟** job 跑 `npm run build`（独立 job，不设跳过变量——打包需要 Electron 二进制）。所有 job `timeout-minutes: 30`。
 - **本地跑测试时**：套件自己 spawn 服务并按 `BUGLIST_PORT`/临时端口隔离；手写临时验证脚本必须 `try/finally` kill 子进程，否则残留进程占住端口（见避坑索引）。
 
 ---
@@ -95,27 +101,27 @@ node test/test-archive-guards.js      # 单跑一个套件（test/test-*.js 都�
 
 | 文件 | 规模 | 职责 | 关键入口 |
 |---|---|---|---|
-| `server.js` | 1499 行 | HTTP + WS 服务端、文件锁、持久化、图片上传 API、导出/导入、备份/快照、端口探测（`BUGLIST_PORT` 可覆盖起始端口） | `startServer()`、`handleMessage()` |
-| `public/index.html` | 746 行 | Vue3 单页模板：启动模式对话框、项目标签栏、任务列表卡片（搜索条+筛选+排序）、新增任务"下一步"面板（deadline/备注）、备注/粘贴/预览弹窗、小火箭 | 启动对话框、任务列表卡片 |
-| `public/app.js` | 3544 行 | Vue3 应用逻辑：WS 客户端、身份、多图、备注、备份、搜索、排序、状态动效、手动 FLIP/飞出动画、负责人 hover、deadline 面板 + 工时评估、深夜彩蛋 | `connectWebSocket()`、`handleMessage()` |
-| `public/style.css` | 2295 行 | 手写样式（CSS 变量 + 响应式 + 动效） | — |
+| `server.js` | ~1920 行 | HTTP + WS 服务端、文件锁、持久化、损坏只读保护、跨进程实例锁、图片上传 API、导出/导入、备份/快照、端口探测（`BUGLIST_PORT` 可覆盖起始端口） | `startServer()`、`handleMessage()` |
+| `public/index.html` | 757 行 | Vue3 单页模板：两步式启动对话框（选模式 → 填名字/地址）、项目标签栏、任务列表卡片（内联搜索+筛选+排序）、新增任务"下一步"面板（deadline/备注）、备注/粘贴/预览弹窗、小火箭 | 启动对话框、任务列表卡片 |
+| `public/app.js` | 3909 行 | Vue3 应用逻辑：WS 客户端、身份（浏览器按标签页隔离 clientId）、多图、备注、备份、搜索、排序、状态动效、手动 FLIP/飞出动画、负责人 hover、deadline 面板 + 工时评估、深夜彩蛋 | `connectWebSocket()`、`handleMessage()` |
+| `public/style.css` | 2370 行 | 手写样式（CSS 变量 + 响应式 + 动效） | — |
 | `public/themes.js` | 508 行 | **13 套成品主题（6 浅 7 深）** + 主题 CSS 生成器（`buildThemeCss`：17 色变量 + rgb/color-mix 派生 + `deriveNotePalette` 主题和谐色板 + Element Plus 联动 + 主题专属装饰） | `BUGLIST_THEMES` / `buildThemeCss` |
 | `public/tuner.html` | — | **主题展厅 / 在线调色台**（开发辅助，`/tuner.html`）：iframe 完整预览 13 套主题（含星云/纸纹/代码雨等专属元素）+ 17 色色板详情 + 高级微调 + 复制导出主题对象 | — |
 | `build/icon.ico` | 164KB | **应用图标 7 档**（256/128/64/48/32/24/16，用户设计图 `build/icon-src.png` 转制），electron-builder 打包用 | — |
 | `public/favicon.ico` | 9.6KB | 浏览器标签页图标（48/32/16） | — |
 | `build/icon-src.png` | — | 应用图标源图（用户设计，730×742，供衍生） | — |
-| `electron/main.js` | 330 行 | 托盘（应用图标）、单实例锁、窗口管理（窗口图标）、IPC（get-local-ip / write-backup） | `app.whenReady` |
+| `electron/main.js` | 439 行 | 托盘（应用图标）、单实例锁、窗口管理（窗口图标、窗口状态持久化 `window-state.json`、崩溃自动重载、启动失败错误弹窗）、IPC（get-local-ip / write-backup） | `app.whenReady` |
 | `electron/preload.js` | 38 行 | contextBridge 暴露 `electronAPI` | — |
 | `electron-builder.yml` | 19 行 | portable 打包配置，输出 `dist/`；未配置代码签名（自签证书无公信任锚，已移除） | — |
-| `build/` | — | 7za 代理（C# 源码 + postinstall 脚本；`7za-proxy.exe` 每次 npm install 重新编译，不入库）、icon.ico、icon-src.png | 坑 1 的固化修复 |
-| `test/test-*.js` 共 6 个测试 | — | 集成测试（多图生命周期 / 备注权限 / 备注图片 / 校验防护 / 模板自闭合防线 / 归档状态机），临时数据目录隔离；`test/helpers.js` 为共用启动·断言工具（非套件） | `npm test` |
-| `.github/workflows/ci.yml` | — | **CI**：push / PR 到 `main` 时在 Node 18.x + 20.x 上跑 `npm ci` + `npm test`（`ELECTRON_SKIP_BINARY_DOWNLOAD=1` 免下 Electron 二进制，`BUGLIST_DATA_ROOT` 指向 runner 临时目录） | GitHub Actions |
+| `build/` | — | 7za 代理（C# 源码 + postinstall 脚本：每次 npm install 用系统 csc 现场编译 `7za-proxy.exe`，csc 不可用/编译失败时还原原版 7za 并跳过；exe 不入库）、icon.ico、icon-src.png | 坑 1 的固化修复 |
+| `test/test-*.js` 共 12 个测试 | — | 集成测试（校验防护 / 多图生命周期 / 备注权限 / 备注图片 / 模板自闭合防线 / 归档状态机 / 崩溃加固 / 任务级删除 / 全量同步 / 导出导入 / 时间锚点 / 协议一致性），临时数据目录隔离；`test/helpers.js` 为共用启动·断言工具（非套件） | `npm test` |
+| `.github/workflows/ci.yml` | — | **CI**：push / PR 到 `main` 时，测试矩阵（ubuntu + windows × Node 18/20）跑 `npm ci` + `npm test`（`ELECTRON_SKIP_BINARY_DOWNLOAD=1` 免下 Electron 二进制，`BUGLIST_DATA_ROOT` 指向 runner 临时目录）；另 windows 打包冒烟 job 跑 `npm run build` | GitHub Actions |
 | `assets/screenshots/` | 3 张 | README 展示图：`home.png`（主界面）/ `home-delete.png`（删除交互）/ `notes.png`（备注弹窗）；原 `image/` 目录 2026-09-03 已按用途拆分（图标源图 → `build/icon-src.png`），**产品截图与打包资源分工不同** | README「长这样」 |
 | `.editorconfig` / `.gitattributes` / `.nvmrc` | — | 编辑器与仓库基础设施：统一缩进与换行、`* text=auto` 行尾归一化、本地 Node 版本基线（18） | — |
 | `LICENSE` | MIT | 许可（README 徽章与 package.json `license` 三处一致） | — |
 | `D:\Bug清单\{用户名}\` | — | **运行时数据目录**：`data.json` + `uploads/`（图片） | — |
 | `docs/smoke-checklist-2026-08-15.md` | — | **打包前手工验收清单**（A~L 共 12 组：布局/状态排序/负责人/deadline/深夜彩蛋/搜索/多图/删除/备注/数据安全/回顶/回归底线）；**本地文档，不入库**（见 .gitignore） | 打包前逐项打勾 |
-| `dist/` | — | 当前打包输出：`任务清单.exe`（便携单文件）+ `win-unpacked/`（文件夹版），`npm run build` 生成，不入库 | — |
+| `dist/` | — | 当前打包输出：`bianqian-<版本>-win-x64.exe`（便携单文件，命名由 `electron-builder.yml` 的 `artifactName` 决定，版本号随 `package.json`）+ `win-unpacked/`（文件夹版），`npm run build` 生成，不入库 | — |
 | `docs/` | — | 本地文档目录（验收清单/归档/规格/迭代建议）：**本地维护，不入库**（需求方约定）；README 中所有 `docs/` 引用均指本地文件 | — |
 
 ---
@@ -134,7 +140,7 @@ node test/test-archive-guards.js      # 单跑一个套件（test/test-*.js 都�
 | 多图截图 | 点击 / 拖拽 / Ctrl+V 粘贴 / 整行拖放，支持多选与多张追加，**单条上限 6 张**（前端拦截，非服务端硬约束），单张删除，预览翻页；**图片区**：牌堆左侧「＋」按钮（无数量徽标——缩略图本就看不全），牌堆宽度随图片数自适应（右缘对齐最后一张卡片）；**uploads 图片长缓存**（文件名唯一不可变 → `Cache-Control: immutable` 一年，二次打开秒开）；**查看器黑屏等图**：打开/翻页先纯黑，图片下载完成（预加载 onload）后一次性放出完整图，杜绝"缩略图放大版→清晰"的闪烁 | app.js `handleImageUpload/deleteImage/openPreview`；server.js `serveStaticFile` |
 | 备注图片 | 项目级/任务级备注可附图（两步式提交），作者可删图，删备注自动清理图片 | app.js `addNoteWithImage/attachNoteImage/updateNoteImage` |
 | 项目拖拽排序 | 标签拖动重排，偏好存本机 localStorage（`buglist_task_order`），不影响他人；**切换项目时面板方向感知滑入**（新项目在有序列表右侧→从右滑入，左侧→从左滑入，0.3s 一次性动画，播完静止） | app.js `orderedTasks/onTaskDrop/onTaskDropToEnd`、`switchTask` |
-| 用户身份 | 稳定 clientId（Electron 用 MAC 哈希、浏览器持久化 uuid）+ 显示名，备注显示作者名 | app.js 身份模块；electron `get-mac-id` |
+| 用户身份 | 稳定 clientId（Electron 用 MAC 哈希；浏览器按**标签页隔离**存 sessionStorage，旧版共享 id 仅由第一个升级的标签页一次性继承——保历史备注编辑权）+ 显示名，备注显示作者名 | app.js 身份模块；electron `get-mac-id` |
 | 负责人（assignee） | **新增任务自动归属**：谁新建的就是谁的（`{ clientId, name }` 随任务数据同步广播）；**hover 浮出**——平时行上零显示（不"公示"，小团队收敛），悬停行时名称上方淡入小标签（边框/淡底 = 当前主题派生和谐色板 `deriveNotePalette(primary)`，随主题联动、颜色即人，与备注作者色点同源）；名字未填时显示「我」/ clientId 前 8 位（兜底同备注）；**只读不可改**（转交留待后续）；存量任务无 assignee 不显示；导入/导出 JSON 归一化保留 | app.js `addBug` / `assigneeLabel` / `getNoteColor`；themes.js `deriveNotePalette`；server.js `handleAdd` / `normalizeBugForImport` |
 | 主题切换 | **13 套成品主题（6 浅 7 深）点选即换肤**：暖纸面（默认）/冷灰纸面/豆沙绿/晨雾淡紫/羊皮纸/樱粉晨雾 + One Dark/GitHub Dark/暖棕夜灯/星空蓝/蔷薇暮色/赛博朋克/黑客帝国；**全元素联动**（按钮/状态胶囊/删除蓄怒动画/Element Plus 组件随主题换色，无割裂）；主题带专属质感（星空蓝星云+流星、羊皮纸/冷灰纸面/豆沙绿纸纹、赛博朋克网格+霓虹、黑客帝国代码雨）；**切换带暗色幕布过渡**（纯暗色幕布淡入 → 换肤 → 淡出，全程 ≈1s 有始有终）；**菜单文字统一颜色**（主题名留白，点进去才揭晓配色，保留探知欲）；选择存本机 localStorage（`buglist_theme`），不参与服务端同步 | themes.js（`BUGLIST_THEMES` + `buildThemeCss`） |
 | 应用图标 | 用户设计图（`build/icon-src.png`，730×742）本地转多尺寸：`build/icon.ico` 7 档（256/128/64/48/32/24/16，electron-builder 打包用）+ `public/favicon.ico` 3 档（浏览器标签页）；**Electron 托盘与窗口图标也使用 favicon.ico**（原托盘为内存生成色块）；非方形已适配为正方形（LANCZOS） | `build/icon.ico`、`public/favicon.ico`、`electron/main.js` |
@@ -146,11 +152,11 @@ node test/test-archive-guards.js      # 单跑一个套件（test/test-*.js 都�
 | 双层备注 | 项目级备注 + 任务级备注，按 clientId 着色区分作者；**默认只读，点「修改」展开编辑**（含上传图片），删除需二次确认，修改后时间刷新 + 「（已修改）」标记 | app.js `openNotesDialog/openBugNotesDialog`、`editingTaskNoteId` 等 |
 | 小火箭回顶 | 右下角火箭按钮（**条件显隐**：向下滚动过阈值才浮现，回顶或接近底部即隐；发射后自动收起）：hover 点火预热，点击发射动画 + 平滑回顶 | app.js `launchRocket`/`onWinScroll`；style.css `.rocket-btn` |
 | 归档体系 | **已完成的任务不能删、只能归档**：已完成行删除按钮换成「归档」（收纳箱图标，单击可逆）；点归档 → 行渐隐出列，沉到面板底部**扑克牌堆**（顶卡显示最近归档名 + ×N 计数，入堆时计数闪烁）；点「展开 N 个归档任务」看完整行（只读：状态下拉 disabled、无编辑/删除，图片可预览、备注可打开，每行一个「恢复」→ 回主列表已完成组原位）；归档行不进主列表/筛选/搜索/计数；切项目或全量同步自动收起展开（纯本地 UI 态不广播）；服务端强防线（白名单 + 归档状态机 + 已完成/归档拒删）由 test-archive-guards.js 覆盖 | app.js `archivedBugs/archiveBug/restoreBug/toggleArchive`；server.js `handleUpdate`(archived)/`handleDelete` |
-| 实时同步 | fullSync（连接时全量）+ broadcast（增量），在线人数 | server.js `handleRequestSync/broadcast` |
+| 实时同步 | fullSync（连接时全量）+ broadcast（增量），在线人数；requestSync 同连接 500ms 限速 + 客户端在途去重 | server.js `handleRequestSync/broadcast` |
 | 断线重连 | 指数退避 + 随机抖动（`min(1000·2ⁿ, 30s)+rand`） | app.js `scheduleReconnect` |
 | 服务器地址记忆 | localStorage 记忆 + 连接失败提示 | app.js `onServerChange` |
-| 客户端本地备份 | Electron 客户端每 30s + 连接/断开时，把数据备份到 `D:\Bug清单\pc\{IP}\data.json` | app.js `startBackupTimer`；main.js `write-backup` |
-| 启动模式选择 | 服务器 / 客户端两种启动入口 | index.html 19–58 行 |
+| 客户端本地备份 | Electron 客户端每 30s + 连接/断开时，把数据备份到 `userData/backups/pc/{IP}/data.json`（旧版为 `D:\Bug清单\pc\`，已废弃、不自动迁移，历史备份需手动搬移） | app.js `startBackupTimer`；main.js `write-backup` |
+| 启动模式选择 | 两步式：第一步选模式（服务器/客户端），第二步填名字/地址（可「重新选择」返回），提交校验在最后的进入/连接按钮 | index.html 40–114 行 |
 
 ---
 
@@ -158,7 +164,7 @@ node test/test-archive-guards.js      # 单跑一个套件（test/test-*.js 都�
 
 ```
 客户端(浏览器/Electron) ──WS──▶ server.js(0.0.0.0:3050~3070) ──▶ D:\Bug清单\{用户}\data.json
-        ▲                          │  Promise 队列锁 + 原子写入(tmp→rename)
+        ▲                          │  Promise 队列锁 + 原子写入(tmp→fsync→rename)
         └────────── broadcast ◀────┘  originClientId + version
 图片：POST/DELETE /api/upload ── multipart 手写解析 + MIME 白名单 + 魔数校验（100MB 上限）
 依赖：/vendor/* 路由映射到 node_modules/（离线化）
@@ -180,6 +186,11 @@ node test/test-archive-guards.js      # 单跑一个套件（test/test-*.js 都�
 - 状态置"已完成"自动记录 `completedAt`，改回则删除。
 - 归档体系：置 `archived=true` 记 `archivedAt`、置 `false` 删两者（同 `completedAt` 伴生范式）；**已完成或已归档的任务拒绝删除**（服务端 handleDelete 前置校验 + 锁内二次判定，前端已完成行删除按钮已换归档按钮）——数据清理靠归档而非删除。
 - 图片上传由服务端直接写 data.json 并广播，不依赖客户端 WS；bug 不存在时自动创建。
+- **损坏只读保护**：data.json 解析失败/结构非法 → 备份 `.corrupted.*`（仅一次）→ 所有写操作抛错拒绝（防空数据覆盖真实数据），读路径以空数据兜底不崩；需人工恢复后重启。IO 错误（权限/占用）与损坏分开处理，前者直接中止当次操作。
+- **跨进程实例锁**：`data.lock` O_EXCL 独占创建 + 写入 pid；双开时第二个实例明确报错退出，残留锁按 pid 探活自动清理（正常退出/信号终止释放）。
+- **WS 加固**：畸形帧守卫（null/数组/非 JSON/未知 type 直接忽略不崩）、心跳 ping/pong 清半开连接（连续 2 次未应答 terminate）、requestSync 同连接 500ms 限速、消息字段校验（id 必须非空字符串、name/content 长度上限、status 白名单）。
+- **文件名安全**：上传落盘/删除/静态服务/导入缺图统计统一过 `resolveUploadPath`（isSafeFilename + resolve 前缀双保险），穿越名一律拒绝而非清洗；uploads 响应带 CSP sandbox 防存储型 XSS。
+- **同源部署**：HTTP 不再返回 CORS 通配头（收紧 drive-by 跨站读取 /api/export 与 POST /api/import 的面）。
 
 ---
 
@@ -187,13 +198,14 @@ node test/test-archive-guards.js      # 单跑一个套件（test/test-*.js 都�
 
 | 关键词 | 坑 | 详情 |
 |---|---|---|
-| 7za / winCodeSign / 软链接 | electron-builder 下载/解压失败 → C# 代理 exe 固化修复 | `docs/archive/HANDOFF.md` 坑 1 |
+| 7za / winCodeSign / 软链接 | electron-builder 下载/解压失败 → C# 代理 exe 固化修复 | `build/setup-7za-proxy.js`（postinstall 用 csc 现场编译，失败自动还原原版 7za） |
 | ENOTDIR / asar 只读 | 打包后写 asar 内部失败 → 数据放 exe 同级 | `docs/archive/HANDOFF.md` 坑 2（代码已再演进，见下） |
 | 便携版数据丢失 | 7z 自解压到 %TEMP% → 曾用 PORTABLE_EXECUTABLE_FILE 定位 | `docs/archive/HANDOFF.md` 坑 3（**代码已移除该方案**，现统一 `D:\Bug清单\{用户名}`） |
 | 空白页 #39 | Vue 3.5 生产版 el-select 插槽硬错误 → 改 CSS 上色 | `docs/archive/HANDOFF.md` 坑 4 |
 | Device or resource busy | 杀毒软件锁 exe → 换输出目录 | `docs/archive/HANDOFF.md` 坑 5 |
 | 自闭合自定义元素 | Vue HTML 模板 `<el-input />` 会解析失败 → 必须闭合标签 | `docs/archive/HANDOFF.md` 坑 6 |
 | MIME 绕过 / 大小失控 / 数据损坏 / TOCTOU | 上传与持久化安全修复 | `docs/archive/HANDOFF.md` 第五节表格 |
+| 双开互踩 / 损坏覆盖 / 半开连接 / 穿越读写删 | server.js 加固批次：实例锁 `data.lock` 防双开、损坏只读保护防空数据覆盖、心跳清半开连接、`resolveUploadPath` 统一穿越校验 | `server.js`（各防线处注释）+ `test-crash-hardening.js` |
 | 双 rAF 瞬移 | CSS 过渡若靠"双 requestAnimationFrame"起跳，两帧可能同帧执行 → 浏览器没记到起始状态 → 过渡不触发 = 瞬移 | 动效一律用「强制回流 FLIP」：钉回旧位置 → `void document.body.offsetHeight` → 再上过渡 |
 | absolute 无 top 跳顶 | absolute 不设 `top` 时，静态位置会跳到 flex 容器顶部 → 飞行/移动起点错（行先瞬移到顶再飞） | 用 `position:fixed` + 显式 `left/top`（真实视口坐标）钉住再动 |
 | transform 不改 paint 顺序 | `transform` 移动不改变绘制层级，长距离移动的行会按 DOM 顺序被其他行遮挡 | 动画期间给"位移最大的主角行"临时高 z-index（999）+ 投影，结束后复位 |
@@ -216,7 +228,7 @@ node test/test-archive-guards.js      # 单跑一个套件（test/test-*.js 都�
 > 📦 **归档位置**：`docs/archive/` —— 该目录下的文档一律视为过时，仅供查历史。
 
 **HANDOFF.md 已知过时点**（原文件已归档至 `docs/archive/`）：
-1. server.js 597 行 → 现 ~1820 行；前端三件套行数全部翻倍。
+1. server.js 597 行 → 现 ~1920 行；前端三件套行数全部翻倍。
 2. 数据目录：原"exe 旁边" → 现 `D:\Bug清单\{用户名}`（`PORTABLE_EXECUTABLE_FILE` 逻辑已删除，仅剩注释）。
 3. 产品名 Bug清单 → **任务清单**；产物目录 `pack15/` 而非 `release/`。
 4. 无多项目 / 备注 / 本地备份 / 启动模式选择等新功能描述。
@@ -245,5 +257,6 @@ node test/test-archive-guards.js      # 单跑一个套件（test/test-*.js 都�
 | 08-16 | deadline 交互迭代：「此刻」按钮改为**工时评估**（deadline 不可能=现在；弹「请评估所需工时 🌙」选 1-5 天 → 自动算当前时间+N 天填好；内置此刻按钮隐藏）；**0.2.1 定稿**（0.3 前置小点先行发布）：负责人 hover 归属 + deadline 工时评估 + 深夜彩蛋 + 主题和谐色板 |
 | 09-03 | **UX 批次（9 项，spec 第 1–9 节 + 交叉评审裁决①–⑨）**：① 吸顶区让位自绘标题栏（`--titlebar-h` 单一事实源，浏览器 0/Electron 36）+ 吸顶投影；②③ 火箭条件显隐（滚动阈值显、回顶/近底隐）+ 发射后自动收起；④ 删除项目二次确认（ElMessageBox，文案含「含已归档」）；⑤ 新建项目本地先行两步式（临时项不广播、确认才落库广播、占位「新项目」、Esc/空名丢弃，服务端兜底名同步改「新项目」）；⑥ 启动弹窗 clamp 流体适配（600×530 免滚动、卡片 wrap 替代断点竖排）；⑦ **归档体系**（已完成拒删、删除按钮换归档、面板底扑克牌堆 + 展开只读 + 原地恢复、`archived/archivedAt` 白名单 + 状态机 + `handleAdd`/导入归一化，`test-archive-guards.js` 16 项覆盖）；⑧ 贴底布局 + 页脚折叠线下；⑨ 全宽拖拽无跳变（header-right `margin-left:auto`+wrap、按钮文字 max-width 平滑收起、断点离散覆盖改 clamp）；最小窗 600×530。全 6 集成测试绿 |
 | 09-03 | **仓库整理与发版收尾**：测试脚本归入 `test/`（共用工具抽到 `test/helpers.js`）、`image/` 按用途拆分（截图 → `assets/screenshots/`，图标源图 → `build/icon-src.png`）、移除 `data.json` 与自签证书的跟踪、打包输出统一 `dist/` 且便携产物名改为 `bianqian-${version}-win-${arch}.exe`；新增 **GitHub Actions CI**（Node 18/20 跑 `npm test`）；**`package-lock.json` 元数据同步**（version 1.0.0→0.3.0 + license/engines，依赖树零漂移）并把 `.dsh/` 补回 `.gitignore` |
+| 10-05 | **提交前收口批次（四部分）**：① 前端 UI 迭代——搜索框内联化（筛选栏右侧胶囊式）、启动对话框两步式（`startupStep`，可返回重选）、主题适配修复（硬编码颜色改 `--text-rgb`/`var(--line)`）、浏览器端 clientId 按标签页隔离（sessionStorage + 旧 id 一次性认领）、IME Enter 防误提交、删除/归档动画定格项目 id + 二次复核、requestSync 在途去重、断线防抖不再吞重连；② **server.js 安全稳定加固（约 +600 行）**——WS 畸形帧守卫、`resolveUploadPath` 路径穿越双保险（上传/删除/静态/导入统计）、uploads CSP sandbox、data.json 损坏只读保护（防空数据覆盖）、跨进程实例锁 `data.lock`、写盘 fsync + rename 重试、心跳清半开连接、requestSync 500ms 限速 + clientCount 形参修复、删除类操作先验目标再打快照、字段白名单/长度校验、移除 CORS 通配头；③ Electron 壳——备份目录 userData 化（穿越拒绝）、窗口状态持久化 `window-state.json`、崩溃自动重载、启动失败错误弹窗、`BUGLIST_PORT`；build/setup-7za-proxy.js 真实 csc 编译 + 失败还原 + 幂等；CI 矩阵 ubuntu+windows × Node 18/20 + Windows 打包冒烟；④ 测试从 6 套件 133 断言扩到 **12 套件 260 断言**（新增 crash-hardening/delete-task/sync-basics/export-import/completed-at/protocol-consistency + `helpers.waitFor` 轮询） |
 
 > 旧产物目录（dist/release/pack10-14）与 pack.zip 已于 2026-07-18 清理删除；`pack15/`、`pack814/` 为历史产物，当前输出 `dist/`。
