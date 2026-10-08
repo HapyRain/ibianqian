@@ -14,6 +14,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
    * 将当前数据备份到本地磁盘
    * @param {string} serverIp - 服务端 IP，用于目录名
    * @param {object} data - 要备份的数据 { version, tasks }
+   * @returns {Promise<{ok: true, path: string}|{ok: false, error: string}>} path 为主进程实际落盘路径（userData/backups/pc/<IP>/data.json）
    */
   writeBackup: (serverIp, data) => ipcRenderer.invoke('write-backup', { serverIp, data }),
 

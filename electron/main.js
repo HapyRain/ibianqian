@@ -142,7 +142,8 @@ ipcMain.handle('write-backup', async (_event, { serverIp, data }) => {
     const tmpPath = backupPath + '.tmp';
     fs.writeFileSync(tmpPath, JSON.stringify(data, null, 2), 'utf-8');
     fs.renameSync(tmpPath, backupPath);
-    return { ok: true };
+    // 回传真实落盘路径：渲染端日志直接用，避免在渲染侧臆测路径（旧版曾硬编码 D:\Bug清单\pc 打日志，与实际位置不符）
+    return { ok: true, path: backupPath };
   } catch (err) {
     console.error('[Backup] 写入失败:', err.message);
     return { ok: false, error: err.message };

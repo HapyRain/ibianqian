@@ -2915,12 +2915,10 @@
         return backupStatus.value;
       });
 
-      /** 把 IP 里的非法目录名字符（: * ? 等）替换为 _ */
-      function backupDirName(ip) {
-        return ip.replace(/[:*?"<>|]/g, '_');
-      }
-
-      /** 写一次本地备份（30s 定时器与连接建立/断开等关键时刻共用）：深拷贝数据 → writeBackup → 更新计数/状态 */
+      /**
+       * 写一次本地备份（30s 定时器与连接建立/断开等关键时刻共用）：深拷贝数据 → writeBackup → 更新计数/状态
+       * 落盘路径由主进程决定（userData/backups/pc/<IP>/data.json）并随结果回传，渲染端只负责展示
+       */
       function writeBackupOnce() {
         const ip = serverHost.value;
         if (!ip || !tasks.value.length) return;
@@ -2929,7 +2927,7 @@
           backupCount++;
           if (res && res.ok) {
             backupStatus.value = 'ok';
-            console.log(`[Backup] #${backupCount} 备份成功 → D:\\Bug清单\\pc\\${backupDirName(ip)}\\data.json (tasks: ${clean.tasks.length})`);
+            console.log(`[Backup] #${backupCount} 备份成功 → ${res.path || '(路径未知)'} (tasks: ${clean.tasks.length})`);
           } else {
             backupStatus.value = 'fail';
             console.warn('[Backup] 写入失败:', res?.error || '未知错误');
