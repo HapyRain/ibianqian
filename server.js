@@ -554,6 +554,22 @@ function normalizeBugTrustFields(target, src) {
     delete target.archived;
     delete target.archivedAt;
   }
+  // aiTrace（M4 需求介入）：add-only 痕迹。非对象 / 缺 used / picked 非字符串一律剔除
+  const at = src.aiTrace;
+  if (at && typeof at === 'object' && !Array.isArray(at) && at.used === true && typeof at.picked === 'string' && at.picked) {
+    target.aiTrace = {
+      used: true,
+      rounds: typeof at.rounds === 'number' && Number.isFinite(at.rounds) ? at.rounds : 1,
+      draft: typeof at.draft === 'string' ? at.draft : '',
+      draftHidden: at.draftHidden === true,
+      picked: at.picked,
+      pickedRound: typeof at.pickedRound === 'number' && Number.isFinite(at.pickedRound) ? at.pickedRound : 1,
+      rejected: typeof at.rejected === 'number' && Number.isFinite(at.rejected) ? at.rejected : 0,
+      edited: at.edited === true,
+    };
+  } else {
+    delete target.aiTrace;
+  }
   return target;
 }
 
@@ -1521,6 +1537,22 @@ function normalizeBugForImport(b) {
       : {}),
     // deadline（0.3 体验小点）：导入归一化保留合法时间戳 number，防止备份-恢复丢失
     ...(typeof b.deadline === 'number' && Number.isFinite(b.deadline) ? { deadline: b.deadline } : {}),
+    // aiTrace（M4 需求介入）：导入归一化保留合法痕迹，防备份-恢复丢失
+    ...(b.aiTrace && typeof b.aiTrace === 'object' && !Array.isArray(b.aiTrace)
+      && b.aiTrace.used === true && typeof b.aiTrace.picked === 'string' && b.aiTrace.picked
+      ? {
+        aiTrace: {
+          used: true,
+          rounds: typeof b.aiTrace.rounds === 'number' && Number.isFinite(b.aiTrace.rounds) ? b.aiTrace.rounds : 1,
+          draft: typeof b.aiTrace.draft === 'string' ? b.aiTrace.draft : '',
+          draftHidden: b.aiTrace.draftHidden === true,
+          picked: b.aiTrace.picked,
+          pickedRound: typeof b.aiTrace.pickedRound === 'number' && Number.isFinite(b.aiTrace.pickedRound) ? b.aiTrace.pickedRound : 1,
+          rejected: typeof b.aiTrace.rejected === 'number' && Number.isFinite(b.aiTrace.rejected) ? b.aiTrace.rejected : 0,
+          edited: b.aiTrace.edited === true,
+        },
+      }
+      : {}),
     // archived（归档体系）：仅当 status 为已完成时保留标记与时间（防脏数据，spec 第 7 节）
     ...(b.archived === true && b.status === '已完成'
       ? { archived: true, ...(typeof b.archivedAt === 'number' && Number.isFinite(b.archivedAt) ? { archivedAt: b.archivedAt } : {}) }

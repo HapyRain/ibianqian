@@ -398,6 +398,197 @@
         } catch (e) { /* 轻启动：读不到就当关闭 */ }
       }
 
+      // ==================== 需求介入（M4）====================
+      // 介入过程全部为产品本地状态（像邮件草稿），不同步、不广播；只有最终确认版落盘广播。
+      const AiIntakeApi = (typeof window !== 'undefined' && window.AiIntake) || null;
+      const aiAssistOn = ref(false);
+      const aiComposeVisible = ref(false);
+      const aiExpanding = ref(false);
+      const aiLoadingTip = ref('');
+      const aiExpandError = ref('');
+      const aiInvoiceVisible = ref(false);
+      const aiInvoice = ref({ finalName: '', picked: '', draft: '', rounds: 1, rejected: 0, draftHidden: false, edited: false, pickedRound: 1 });
+      const aiTraceExpandId = ref(null);
+      let aiIntakeState = AiIntakeApi ? AiIntakeApi.createAiIntakeState() : {
+        draft: '', originalDraft: '', candidates: [], picked: null, pickedRound: 0, rounds: 0, rejected: 0, edited: false, draftHidden: false,
+      };
+      const aiIntake = ref({ ...aiIntakeState, candidates: [] });
+      let aiLoadTimer = null;
+      let aiLoadTipTimer = null;
+
+      function syncAiIntake() {
+        aiIntake.value = { ...aiIntakeState, candidates: [...(aiIntakeState.candidates || [])] };
+      }
+      function applyAiAction(action) {
+        if (AiIntakeApi) aiIntakeState = AiIntakeApi.nextAiState(aiIntakeState, action);
+        else {
+          // 兜底：无模块时极简处理
+          if (action.type === 'setDraft') aiIntakeState.draft = action.draft;
+          if (action.type === 'expandOk') { aiIntakeState.candidates = action.candidates || []; aiIntakeState.rounds = (aiIntakeState.rounds || 0) + 1; if (!aiIntakeState.originalDraft) aiIntakeState.originalDraft = aiIntakeState.draft; }
+          if (action.type === 'expandFail') aiIntakeState.candidates = [];
+          if (action.type === 'pick') { aiIntakeState.picked = action.text; aiIntakeState.draft = action.text; aiIntakeState.edited = false; aiIntakeState.candidates = (aiIntakeState.candidates || []).filter((c) => c !== action.text); }
+          if (action.type === 'half') { aiIntakeState.draft = action.text; aiIntakeState.edited = true; aiIntakeState.candidates = (aiIntakeState.candidates || []).filter((c) => c !== action.text); }
+          if (action.type === 'reject') { aiIntakeState.candidates = (aiIntakeState.candidates || []).filter((c) => c !== action.text); aiIntakeState.rejected = (aiIntakeState.rejected || 0) + 1; }
+          if (action.type === 'hideDraft') aiIntakeState.draftHidden = !!action.hidden;
+          if (action.type === 'reset') aiIntakeState = { draft: '', originalDraft: '', candidates: [], picked: null, pickedRound: 0, rounds: 0, rejected: 0, edited: false, draftHidden: false };
+        }
+        syncAiIntake();
+      }
+
+      function closeAiCompose() {
+        aiComposeVisible.value = false;
+        aiExpanding.value = false;
+        aiLoadingTip.value = '';
+        aiExpandError.value = '';
+        if (aiLoadTimer) { clearTimeout(aiLoadTimer); aiLoadTimer = null; }
+        if (aiLoadTipTimer) { clearTimeout(aiLoadTipTimer); aiLoadTipTimer = null; }
+      }
+
+      function openAiCompose() {
+        applyAiAction({ type: 'reset' });
+        aiExpandError.value = '';
+        aiLoadingTip.value = '';
+        aiComposeVisible.value = true;
+      }
+
+      function onAiDraftInput(v) {
+        applyAiAction({ type: 'setDraft', draft: typeof v === 'string' ? v : '' });
+      }
+
+      async function runAiExpand() {
+        const draft = (aiIntake.value.draft || '').trim();
+        if (!draft) {
+          ElementPlus.ElMessage.warning('请先写一句草稿');
+          return;
+        }
+        aiExpanding.value = true;
+        aiExpandError.value = '';
+        aiLoadingTip.value = '';
+        applyAiAction({ type: 'expandStart' });
+        // 渐进提示：3s / 8s
+        if (aiLoadTimer) clearTimeout(aiLoadTimer);
+        if (aiLoadTipTimer) clearTimeout(aiLoadTipTimer);
+        aiLoadTimer = setTimeout(() => { aiLoadingTip.value = '正在思考…'; }, 3000);
+        aiLoadTipTimer = setTimeout(() => { aiLoadingTip.value = '这是一个好问题，还需要深度思考（看到说明没挂）'; }, 8000);
+        try {
+          const res = await fetch(apiUrl('/api/ai/expand'), {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ draft }),
+          });
+          const data = await res.json();
+          if (data && Array.isArray(data.candidates) && data.candidates.length) {
+            applyAiAction({ type: 'expandOk', candidates: data.candidates });
+          } else {
+            applyAiAction({ type: 'expandFail' });
+            aiExpandError.value = (data && data.error) || 'AI 这次没组织好，可直接提交原文';
+          }
+        } catch (e) {
+          applyAiAction({ type: 'expandFail' });
+          aiExpandError.value = '网络异常：' + e.message + '（可直接提交原文）';
+        } finally {
+          aiExpanding.value = false;
+          if (aiLoadTimer) { clearTimeout(aiLoadTimer); aiLoadTimer = null; }
+          if (aiLoadTipTimer) { clearTimeout(aiLoadTipTimer); aiLoadTipTimer = null; }
+          aiLoadingTip.value = '';
+        }
+      }
+
+      function aiPick(text) { applyAiAction({ type: 'pick', text }); }
+      function aiHalf(text) {
+        applyAiAction({ type: 'half', text });
+        ElementPlus.ElMessage.info('已扔回输入框，可改写后再点「AI 介入」');
+      }
+      function aiReject(text) { applyAiAction({ type: 'reject', text }); }
+
+      function toggleAiTraceExpand(bugId) {
+        aiTraceExpandId.value = aiTraceExpandId.value === bugId ? null : bugId;
+      }
+
+      function buildAiTraceFromState() {
+        if (AiIntakeApi) return AiIntakeApi.buildAiTrace(aiIntakeState);
+        if (!aiIntakeState.picked) return null;
+        return {
+          used: true,
+          rounds: aiIntakeState.rounds || 1,
+          draft: aiIntakeState.originalDraft || aiIntakeState.draft || '',
+          draftHidden: !!aiIntakeState.draftHidden,
+          picked: aiIntakeState.picked,
+          pickedRound: aiIntakeState.pickedRound || 1,
+          rejected: aiIntakeState.rejected || 0,
+          edited: !!aiIntakeState.edited,
+        };
+      }
+
+      function submitAiCompose() {
+        const name = (aiIntake.value.draft || '').trim();
+        if (!name) {
+          ElementPlus.ElMessage.warning('定稿不能为空');
+          return;
+        }
+        const trace = buildAiTraceFromState();
+        if (trace) {
+          // 有介入痕迹 → 发票预览强制
+          aiInvoice.value = {
+            finalName: name,
+            picked: trace.picked,
+            draft: trace.draft,
+            rounds: trace.rounds,
+            rejected: trace.rejected,
+            draftHidden: trace.draftHidden,
+            edited: trace.edited,
+            pickedRound: trace.pickedRound,
+          };
+          aiInvoiceVisible.value = true;
+          return;
+        }
+        // 无痕迹 → 直接提交
+        commitAiCompose(name, null);
+      }
+
+      function confirmAiInvoice() {
+        const inv = aiInvoice.value;
+        const name = (inv.finalName || '').trim();
+        const trace = {
+          used: true,
+          rounds: inv.rounds || 1,
+          draft: inv.draft || '',
+          draftHidden: !!inv.draftHidden,
+          picked: inv.picked,
+          pickedRound: inv.pickedRound || 1,
+          rejected: inv.rejected || 0,
+          edited: !!inv.edited,
+        };
+        aiInvoiceVisible.value = false;
+        commitAiCompose(name, trace);
+      }
+
+      function commitAiCompose(name, aiTrace) {
+        const task = currentTask.value;
+        if (!task) {
+          ElementPlus.ElMessage.warning('请先创建项目');
+          return;
+        }
+        const assigneeName = displayName.value.trim();
+        const newBug = {
+          id: randomUUID(),
+          name,
+          status: '待修复',
+          images: [],
+          statusChangedAt: Date.now(),
+          assignee: { clientId: clientId, name: assigneeName || null },
+        };
+        if (aiTrace) newBug.aiTrace = aiTrace;
+        statusFilter.value = '全部';
+        searchText.value = '';
+        task.bugs.push(newBug);
+        sendAdd(newBug.id);
+        enteringBugId.value = newBug.id;
+        setTimeout(() => { enteringBugId.value = null; }, 320);
+        pulse(document.querySelector('.bug-panel .btn-add-task'), 'land', 360);
+        closeAiCompose();
+        applyAiAction({ type: 'reset' });
+      }
+
       /**
        * 导出数据：拉取 /api/export 并下载 JSON 备份
        */
@@ -1971,11 +2162,18 @@
 
       /**
        * 新增任务
+       * 轻启动（AI 辅助关 / 未开启 AI）：与现状完全一致，立即建行。
+       * AI 辅助开：打开本地撰写面板，确认后才落盘广播。
        */
       function addBug() {
         const task = currentTask.value;
         if (!task) {
           ElementPlus.ElMessage.warning('请先创建项目');
+          return;
+        }
+        // AI 辅助开启 → 本地撰写（过程不同步）
+        if (aiEnabled.value && aiAssistOn.value) {
+          openAiCompose();
           return;
         }
 
@@ -3870,6 +4068,27 @@
         openAiSettings,
         saveAiSettings,
         testAiConnection,
+
+        // 需求介入（M4）
+        aiAssistOn,
+        aiComposeVisible,
+        aiExpanding,
+        aiLoadingTip,
+        aiExpandError,
+        aiIntake,
+        aiInvoiceVisible,
+        aiInvoice,
+        aiTraceExpandId,
+        openAiCompose,
+        closeAiCompose,
+        onAiDraftInput,
+        runAiExpand,
+        aiPick,
+        aiHalf,
+        aiReject,
+        submitAiCompose,
+        confirmAiInvoice,
+        toggleAiTraceExpand,
 
         // 搜索
         searchText,

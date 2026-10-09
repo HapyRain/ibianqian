@@ -231,6 +231,11 @@
             <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
           </template>
         </el-input>
+        <!-- 修正点D：enabled=false 时新增任务面板不渲染「AI 辅助」开关 -->
+        <div v-if="aiEnabled" class="ai-assist-toggle" title="开启后新增任务可走 AI 介入；关闭=轻启动，与现状一致">
+          <el-switch v-model="aiAssistOn" size="small"></el-switch>
+          <span class="ai-assist-label">AI 辅助</span>
+        </div>
         <el-button class="btn-add-task" @click="addBug" :disabled="!currentTaskId" title="新增任务">
           <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.5"/><path d="M12 8.5v7M8.5 12h7"/></svg><span class="btn-label">新增任务</span>
         </el-button>
@@ -254,6 +259,21 @@
             <el-input v-if="editingBugId === bug.id" :model-value="bug.name" @update:model-value="bug.name = $event"
               size="small" placeholder="请输入任务名称" @blur="finishEditName(bug)" @keyup.enter="finishEditName(bug, true)" @keyup.escape="cancelEditName(bug)" ></el-input>
             <span v-else class="name-text" :class="{ 'name-placeholder': !bug.name }">{{ bug.name || '双击编辑名称...' }}</span>
+            <!-- 三层痕迹（M4）：定稿=name 完整显示；草稿与 AI 痕迹折叠 -->
+            <span v-if="bug.aiTrace" class="ai-trace-chip" @click.stop="toggleAiTraceExpand(bug.id)" title="AI 介入痕迹">
+              AI{{ bug.aiTrace.rounds ? '×' + bug.aiTrace.rounds : '' }}
+            </span>
+          </div>
+          <div v-if="aiTraceExpandId === bug.id && bug.aiTrace" class="ai-trace-panel">
+            <div class="ai-trace-row ai-trace-picked"><span class="ai-trace-label">AI 痕迹</span>{{ bug.aiTrace.picked }}</div>
+            <div class="ai-trace-row ai-trace-meta">介入 {{ bug.aiTrace.rounds }} 轮 · 否决 {{ bug.aiTrace.rejected }} 条{{ bug.aiTrace.edited ? ' · 定稿已修改' : '' }}</div>
+            <div class="ai-trace-row ai-trace-draft">
+              <span class="ai-trace-label">草稿</span>
+              <template v-if="bug.aiTrace.draftHidden">
+                <span class="ai-trace-folded">已折叠 1 条</span>
+              </template>
+              <template v-else>{{ bug.aiTrace.draft }}</template>
+            </div>
           </div>
           <div class="bug-cell bug-shots" @dragover="onDragOver" @dragleave="onDragLeave" @drop="onDrop($event, bug.id)">
             <!-- 再次添加：牌堆左侧独立"＋"按钮（简约，无数量徽标——缩略图本就看不全，数量无意义） -->
@@ -748,6 +768,69 @@
         </template>
       </el-dialog>
 
+      <!-- AI 介入撰写面板（本地草稿，不同步；确认后才落盘广播） -->
+      <el-dialog v-model="aiComposeVisible" title="新增任务 · AI 介入" width="640px" @close="closeAiCompose">
+        <div class="ai-compose">
+          <div class="ai-compose-row">
+            <el-input
+              v-model="aiIntake.draft"
+              type="textarea"
+              :rows="3"
+              placeholder="先写一句口语，如：前端太丑了"
+              @input="onAiDraftInput"
+            ></el-input>
+          </div>
+          <div class="ai-compose-actions">
+            <el-button size="small" :loading="aiExpanding" @click="runAiExpand">AI 介入</el-button>
+            <span v-if="aiLoadingTip" class="ai-loading-tip">{{ aiLoadingTip }}</span>
+            <span v-if="aiExpandError" class="ai-expand-error">{{ aiExpandError }}</span>
+          </div>
+          <!-- 右侧候选面板 -->
+          <div v-if="aiExpanding || (aiIntake.candidates && aiIntake.candidates.length)" class="ai-candidates">
+            <div v-if="aiExpanding" class="ai-cand-loading">正在思考…</div>
+            <div v-for="c in aiIntake.candidates" :key="c" class="ai-cand-card">
+              <div class="ai-cand-text">{{ c }}</div>
+              <div class="ai-cand-actions">
+                <el-button size="small" type="primary" @click="aiPick(c)">选它</el-button>
+                <el-button size="small" @click="aiHalf(c)">对一半</el-button>
+                <el-button size="small" @click="aiReject(c)">完全不是</el-button>
+              </div>
+            </div>
+            <div v-if="aiIntake.candidates.length === 0 && !aiExpanding" class="ai-cand-empty">本轮候选已全部否决，可改写后再介入</div>
+          </div>
+          <div class="ai-compose-footer">
+            <el-button @click="closeAiCompose">取消</el-button>
+            <!-- 失败降级：原文提交出口始终可用 -->
+            <el-button type="primary" @click="submitAiCompose">提交</el-button>
+          </div>
+        </div>
+      </el-dialog>
+
+      <!-- 发票预览（有介入痕迹时提交前强制） -->
+      <el-dialog v-model="aiInvoiceVisible" title="发票预览 · 确认后落盘" width="520px">
+        <div class="ai-invoice">
+          <div class="ai-invoice-final">
+            <div class="ai-invoice-label">定稿</div>
+            <div class="ai-invoice-final-text">{{ aiInvoice.finalName }}</div>
+          </div>
+          <div class="ai-invoice-trace">
+            <div class="ai-invoice-label">AI 痕迹（不可藏）</div>
+            <div>{{ aiInvoice.picked }}</div>
+            <div class="ai-invoice-meta">介入 {{ aiInvoice.rounds }} 轮 · 否决 {{ aiInvoice.rejected }} 条</div>
+          </div>
+          <div class="ai-invoice-draft">
+            <div class="ai-invoice-label">草稿</div>
+            <div>{{ aiInvoice.draft }}</div>
+            <el-checkbox v-model="aiInvoice.draftHidden">隐藏此条</el-checkbox>
+            <div v-if="aiInvoice.draftHidden" class="ai-invoice-folded">别人将看到「已折叠 1 条」，内容不可见但信号在</div>
+          </div>
+        </div>
+        <template #footer>
+          <el-button @click="aiInvoiceVisible = false">返回继续改</el-button>
+          <el-button type="primary" @click="confirmAiInvoice">确认提交</el-button>
+        </template>
+      </el-dialog>
+
       <!-- 底部信息栏 -->
       <footer class="app-footer">
         <span>数据版本：v{{ dataVersion }}</span>
@@ -821,6 +904,8 @@
   <script src="/vendor/element-plus/dist/locale/zh-cn.min.js"></script>
   <!-- 主题定义（10 套成品主题 + CSS 生成器） -->
   <script src="themes.js"></script>
+  <!-- 需求介入状态机（纯函数） -->
+  <script src="ai-intake.js"></script>
   <!-- 应用逻辑 -->
   <script src="app.js"></script>
 </body>

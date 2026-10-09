@@ -2227,6 +2227,31 @@ body {
 .ai-health-ok{font-size:12px;color:var(--primary)}
 .ai-health-bad{font-size:12px;color:#c45c5c;max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 
+/* ---- 需求介入（M4）---- */
+.ai-assist-toggle{display:flex;align-items:center;gap:6px;flex:none}
+.ai-assist-label{font-size:12px;color:var(--text-2);white-space:nowrap}
+.ai-trace-chip{margin-left:6px;flex:none;font-size:10px;padding:1px 6px;border-radius:999px;background:rgba(var(--primary-rgb),.12);color:var(--primary);cursor:pointer;vertical-align:middle}
+.ai-trace-panel{grid-column:1/-1;padding:8px 12px;margin:4px 0 8px;border:1px dashed var(--line);border-radius:10px;background:var(--surface);font-size:12px;color:var(--text-2)}
+.ai-trace-row{margin:2px 0;line-height:1.5}
+.ai-trace-label{display:inline-block;min-width:48px;color:var(--text-2);margin-right:6px}
+.ai-trace-folded{opacity:.75;font-style:italic}
+.ai-compose{display:flex;flex-direction:column;gap:10px}
+.ai-compose-actions{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.ai-loading-tip{font-size:12px;color:var(--text-2)}
+.ai-expand-error{font-size:12px;color:#c45c5c}
+.ai-candidates{display:flex;flex-direction:column;gap:8px;max-height:260px;overflow:auto}
+.ai-cand-card{border:1px solid var(--line);border-radius:10px;padding:10px 12px;background:var(--surface)}
+.ai-cand-text{font-size:13px;color:var(--text);margin-bottom:8px;line-height:1.5}
+.ai-cand-actions{display:flex;gap:8px;flex-wrap:wrap}
+.ai-cand-loading,.ai-cand-empty{font-size:12.5px;color:var(--text-2);padding:8px 4px}
+.ai-compose-footer{display:flex;justify-content:flex-end;gap:10px;margin-top:4px}
+.ai-invoice{display:flex;flex-direction:column;gap:14px}
+.ai-invoice-label{font-size:11.5px;color:var(--text-2);margin-bottom:4px}
+.ai-invoice-final-text{font-size:18px;font-weight:700;color:var(--text);line-height:1.4}
+.ai-invoice-trace,.ai-invoice-draft{font-size:13px;color:var(--text);line-height:1.6}
+.ai-invoice-meta{font-size:12px;color:var(--text-2);margin-top:4px}
+.ai-invoice-folded{font-size:11.5px;color:var(--text-2);margin-top:4px}
+
 /* ============================================================
    主题切换过渡（暗色幕布）：点选主题 → 幕布淡入 → 换肤（零跳变）→ 幕布淡出。
    全程 ≈1.05s，有始有终；幕布期间挡点击防半途打断。层级 3000（压过一切）。
