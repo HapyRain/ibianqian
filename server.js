@@ -24,6 +24,9 @@ const username = (() => {
   try { return os.userInfo().username; } catch (_) { return 'default'; }
 })();
 const DATA_ROOT = process.env.BUGLIST_DATA_ROOT || path.join('D:\\Bug清单', username);
+// AI 网关（M1+M4）：配置与连通探测。key 只进 ai.config.json，不进 data.json / WS。
+const { createAiGateway } = require('./ai-gateway');
+const aiGateway = createAiGateway({ dataRoot: DATA_ROOT });
 const DATA_FILE = path.join(DATA_ROOT, 'data.json');
 const TMP_FILE = path.join(DATA_ROOT, '.data.tmp');
 const PUBLIC_DIR = path.join(__dirname, 'public');
@@ -1599,6 +1602,76 @@ function createHttpHandler() {
   return function handler(req, res) {
     // 路由统一取去查询串后的路径，并去尾斜杠做精确匹配（防 /api/exportxxx 之类前缀误命中）
     const routePath = req.url.split('?')[0].replace(/\/+$/, '') || '/';
+
+    // ---- AI 网关路由（M1+M4）----
+    // ⚠️ 所在 handler 是**同步** function（createHttpHandler 返回的 handler），块内禁用 await——
+    //    异步一律 .then()，绝不能把外层 handler 改成 async。
+    if (req.method === 'GET' && routePath === '/api/ai/config') {
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify({ config: aiGateway.maskConfig(aiGateway.loadConfig()) }));
+      return;
+    }
+    if (req.method === 'PUT' && routePath === '/api/ai/config') {
+      let body = '';
+      let oversized = false;
+      req.on('data', (c) => {
+        if (oversized) return;
+        body += c;
+        if (body.length > 65536) {
+          oversized = true;
+          res.writeHead(413, { 'Content-Type': 'text/plain; charset=utf-8' });
+          res.end('Payload Too Large');
+          req.destroy();
+        }
+      });
+      req.on('end', () => {
+        if (oversized) return; // destroy 后部分 Node 版本仍会派发 end——标志位防重复响应
+        let incoming;
+        try { incoming = JSON.parse(body || '{}'); }
+        catch (e) {
+          res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+          res.end(JSON.stringify({ error: '请求体不是合法 JSON' }));
+          return;
+        }
+        // 修正点G：parse 结果必须先验 plain object——body 为 'null' 时 JSON.parse 返回 null，
+        // 下方 hasOwnProperty.call(null, 'key') 抛 TypeError 且无人捕获 → req 'end' 监听器内崩进程
+        if (!incoming || typeof incoming !== 'object' || Array.isArray(incoming)) {
+          res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+          res.end(JSON.stringify({ error: '请求体必须是 JSON 对象' }));
+          return;
+        }
+        // 修正点⑤：key 字段级语义——缺省 key 字段 = 保留已存 key；显式 key:'' = 清空（key:null 归一为 ''）
+        if (!Object.prototype.hasOwnProperty.call(incoming, 'key')) {
+          incoming.key = aiGateway.loadConfig().key;
+        }
+        // 修正点C（触发侧）：先取旧配置，供下方摘要触发比较——保存后 loadConfig 返回的已是新值，比较恒假
+        const oldCfg = aiGateway.loadConfig();
+        let out;
+        try { out = aiGateway.saveConfig(incoming); }
+        catch (e) {
+          res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+          res.end(JSON.stringify({ error: e.message }));
+          return;
+        }
+        // 修正点C：context 变更（含清空）→ 异步预压缩摘要（fire-and-forget，失败静默保留旧摘要）
+        if (oldCfg.context !== out.context && typeof aiGateway.refreshContextSummary === 'function') {
+          aiGateway.refreshContextSummary().catch(() => {});
+        }
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({ config: aiGateway.maskConfig(out) }));
+      });
+      return;
+    }
+    if (req.method === 'POST' && routePath === '/api/ai/test') {
+      aiGateway.testConnection().then((result) => {
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify(result));
+      }).catch((e) => {
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({ ok: false, latencyMs: 0, error: e.message }));
+      });
+      return;
+    }
 
     // API 路由：数据导出 / 导入
     // 注：前端/Electron 均同源访问（loadURL http://localhost:port），不再返回 CORS 通配头——

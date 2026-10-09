@@ -212,7 +212,121 @@ async function runTests() {
   const incomplete = await gw.testConnection();
   assert(incomplete.ok === false && incomplete.error.includes('配置不完整'), '配置不完整时直接失败');
 
-  // ---------- Task 5-8 及 M4 的分块断言在下方继续追加 ----------
+  // ---------- Task 5: HTTP 路由 ----------
+  let httpServer = null;
+  try {
+    const started = await startServer(3050);
+    httpServer = started.httpServer;
+    const { port } = started;
+
+    const getCfg = () => new Promise((resolve, reject) => {
+      http.get({ host: 'localhost', port, path: '/api/ai/config' }, (res) => {
+        let t = ''; res.on('data', (c) => { t += c; });
+        res.on('end', () => resolve({ statusCode: res.statusCode, body: JSON.parse(t) }));
+      }).on('error', reject);
+    });
+    const putCfg = (obj) => new Promise((resolve, reject) => {
+      const body = typeof obj === 'string' ? obj : JSON.stringify(obj);
+      const req = http.request({
+        host: 'localhost', port, path: '/api/ai/config', method: 'PUT',
+        headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
+      }, (res) => {
+        let t = ''; res.on('data', (c) => { t += c; });
+        res.on('end', () => {
+          let parsed = {};
+          try { parsed = JSON.parse(t || '{}'); } catch (e) { /* ignore */ }
+          resolve({ statusCode: res.statusCode, body: parsed, raw: t });
+        });
+      });
+      req.on('error', reject);
+      req.end(body);
+    });
+    const postTest = () => new Promise((resolve, reject) => {
+      const req = http.request({ host: 'localhost', port, path: '/api/ai/test', method: 'POST' }, (res) => {
+        let t = ''; res.on('data', (c) => { t += c; });
+        res.on('end', () => resolve({ statusCode: res.statusCode, body: JSON.parse(t || '{}') }));
+      });
+      req.on('error', reject);
+      req.end();
+    });
+
+    const g = await getCfg();
+    assert(g.statusCode === 200, 'GET /api/ai/config 200');
+    assert(g.body.config.keySet === false, 'GET 默认 keySet=false');
+    assert(g.body.config.key === '', 'GET 响应 key 恒为空串');
+
+    const p = await putCfg({
+      enabled: true, provider: 'deepseek', protocol: 'openai',
+      baseUrl: 'https://api.deepseek.com/v1', key: 'sk-http-secret', model: 'deepseek-chat',
+    });
+    assert(p.statusCode === 200, 'PUT /api/ai/config 200');
+    assert(p.body.config.keySet === true, 'PUT 响应 keySet=true');
+    assert(p.body.config.key === '', 'PUT 响应绝不回传明文 key');
+    assert(!p.raw.includes('sk-http-secret'), 'PUT 响应原文无明文 key');
+
+    const g2 = await getCfg();
+    assert(g2.body.config.model === 'deepseek-chat', 'GET 读到保存后的 model');
+    assert(g2.body.config.key === '', 'GET 二读依然无明文 key');
+    assert(g2.body.config.keySet === true, 'GET 二读 keySet=true');
+
+    const dataRaw = dataJsonText();
+    assert(!dataRaw.includes('sk-http-secret'), 'data.json（或尚未创建）不含 HTTP 保存的 key');
+
+    // key 保留语义：PUT 请求体缺省 key 字段 = 保留服务端已存 key
+    const pKeep = await putCfg({
+      enabled: true, provider: 'custom', protocol: 'openai',
+      baseUrl: 'https://api.deepseek.com/v1', model: 'deepseek-chat',
+    });
+    assert(pKeep.statusCode === 200, '缺省 key 字段的 PUT 200');
+    assert(pKeep.body.config.keySet === true, '缺省 key 字段时保留已存 key（keySet 仍为 true）');
+    assert(pKeep.body.config.model === 'deepseek-chat', '缺省 key 字段时其余字段正常更新');
+
+    // 修正点G：畸形 body 防崩
+    for (const bad of ['null', '"str"', '123', '[]']) {
+      const r = await putCfg(bad);
+      assert(r.statusCode === 400, `畸形 body ${bad} → 400`);
+      assert(typeof r.body.error === 'string', `畸形 body ${bad} 带 error 文案`);
+    }
+    const alive = await getCfg();
+    assert(alive.statusCode === 200, '畸形 PUT 后进程存活（GET 仍 200）');
+
+    const pBad = await putCfg({ key: 'sk-x', baseUrl: 'ftp://bad', protocol: 'openai', model: 'm' });
+    assert(pBad.statusCode === 400, '非法 baseUrl 的 PUT 返回 400');
+    assert(typeof pBad.body.error === 'string', '400 带 error 文案');
+
+    // 连通探测：指向本地 mock（401），绝不打真实外网
+    const mockFail = await new Promise((resolve) => {
+      const srv = http.createServer((req, res) => {
+        res.writeHead(401, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: { message: 'invalid api key' } }));
+      });
+      srv.listen(0, '127.0.0.1', () => resolve(srv));
+    });
+    await putCfg({
+      enabled: true, provider: 'custom', protocol: 'openai',
+      baseUrl: `http://127.0.0.1:${mockFail.address().port}/v1`, key: 'sk-mock-bad', model: 'm',
+    });
+    const t = await postTest();
+    assert(t.statusCode === 200, 'POST /api/ai/test 恒 200（业务结果放 body）');
+    assert(t.body.ok === false, 'mock 401 时 ok:false');
+    assert(typeof t.body.error === 'string' && t.body.error.includes('401'), '失败带 HTTP 状态的 error 文案');
+    mockFail.close();
+
+    // 静态页与既有路由不受影响（正控）
+    const home = await new Promise((resolve, reject) => {
+      http.get({ host: 'localhost', port, path: '/' }, (res) => {
+        res.resume();
+        res.on('end', () => resolve(res.statusCode));
+      }).on('error', reject);
+    });
+    assert(home === 200, '既有 / 路由不受影响');
+  } finally {
+    // 只关服务，不删 DATA_ROOT——后续任务断言仍要读写配置
+    if (httpServer) { try { httpServer.close(); } catch (e) { /* ignore */ } }
+    await H.sleep(100);
+  }
+
+  // ---------- Task 6-8 及 M4 的分块断言在下方继续追加 ----------
   mock.close();
   mock2.close();
   mock3.close();
