@@ -85,11 +85,72 @@ function createAiGateway({ dataRoot }) {
     return cfg;
   }
 
+  // 串行队列：任何并发 chat 都排队执行，防同一 key 并发打爆限流
+  let _queue = Promise.resolve();
+  function enqueue(task) {
+    const run = _queue.then(() => task());
+    _queue = run.then(() => {}, () => {});
+    return run;
+  }
+
+  async function jsonFetch(url, options, redactKey) {
+    const res = await fetch(url, options);
+    const text = await res.text();
+    let json = null;
+    try { json = JSON.parse(text); } catch (e) { /* 非 JSON 响应 */ }
+    if (!res.ok) {
+      let detail = (json && (json.error?.message || json.error || json.message)) || text.slice(0, 200);
+      if (typeof detail !== 'string') detail = JSON.stringify(detail);
+      // 上游错误体可能原样回显请求内容——含 key 则脱敏，防凭据进日志/错误提示
+      if (redactKey && typeof redactKey === 'string' && redactKey) detail = detail.split(redactKey).join('***');
+      throw new Error(`模型请求失败 HTTP ${res.status}: ${detail}`);
+    }
+    return json;
+  }
+
+  async function chatOpenAICompat(cfg, opts) {
+    const base = cfg.baseUrl.replace(/\/+$/, '');
+    const json = await jsonFetch(base + '/chat/completions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${cfg.key}` },
+      body: JSON.stringify({ model: cfg.model, messages: opts.messages, max_tokens: opts.maxTokens ?? 1024 }),
+    }, cfg.key);
+    const content = json && json.choices && json.choices[0] && json.choices[0].message
+      ? (json.choices[0].message.content || '') : '';
+    return { content, raw: json };
+  }
+
+  // 不入队的底层调用：读配置齐备性 → 按协议分流。已被 enqueue 包裹的调用方（expandDraft）只能用它。
+  // ⚠️ 禁止在 enqueue 内调用 chat()——会二次入队：外层任务等内层、内层排在外层之后 = 死锁。
+  async function chatRaw(cfg, opts) {
+    if (!cfg.key || !cfg.baseUrl || !cfg.model) throw new Error('AI 配置不完整：baseUrl / key / model 均必填');
+    if (cfg.protocol === 'anthropic') return chatAnthropic(cfg, opts); // Task 3 实现前先 throw
+    if (cfg.protocol === 'gemini') return chatGemini(cfg, opts);
+    return chatOpenAICompat(cfg, opts);
+  }
+
+  // 对外唯一入口：始终经串行队列。
+  // enabled 门控在路由层（/api/ai/expand）与前端入口；chat 本身不拦（testConnection 需要在 enabled=false 时可用）
+  async function chat(opts) {
+    return enqueue(() => chatRaw(loadConfig(), opts));
+  }
+
+  // Task 3 占位：骨架已建，实现落地前抛错
+  async function chatAnthropic(_cfg, _opts) {
+    throw new Error('anthropic 协议适配尚未实现');
+  }
+  async function chatGemini(_cfg, _opts) {
+    throw new Error('gemini 协议适配尚未实现');
+  }
+
   return {
     loadConfig,
     saveConfig,
     maskConfig,
     configFile,
+    chat,
+    chatRaw,
+    enqueue,
   };
 }
 
