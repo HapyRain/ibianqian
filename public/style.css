@@ -2215,6 +2215,18 @@ body {
 .settings-hint{font-size:11.5px;color:var(--text-2);margin:4px 0 10px}
 .settings-actions{display:flex;justify-content:flex-end;align-items:center;gap:10px;margin-top:14px}
 
+/* ---- AI 设置对话框（M1）---- */
+.ai-settings-form{display:flex;flex-direction:column;gap:10px}
+.ai-settings-row{display:flex;align-items:center;gap:12px}
+.ai-settings-row-block{flex-direction:column;align-items:stretch}
+.ai-settings-label{flex:none;width:88px;font-size:12.5px;color:var(--text-2)}
+.ai-settings-row .el-select,.ai-settings-row .el-input{flex:1}
+.ai-settings-hint{font-size:11.5px;color:var(--text-2);flex:1}
+.ai-health{display:flex;align-items:center;gap:10px;flex:1}
+.ai-health-none{font-size:12px;color:var(--text-2)}
+.ai-health-ok{font-size:12px;color:var(--primary)}
+.ai-health-bad{font-size:12px;color:#c45c5c;max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
 /* ============================================================
    主题切换过渡（暗色幕布）：点选主题 → 幕布淡入 → 换肤（零跳变）→ 幕布淡出。
    全程 ≈1.05s，有始有终；幕布期间挡点击防半途打断。层级 3000（压过一切）。

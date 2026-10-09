@@ -603,6 +603,11 @@
           <span class="more-icon"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 00.3 1.9l.1.1a2 2 0 11-2.9 2.9l-.1-.1a1.7 1.7 0 00-1.9-.3 1.7 1.7 0 00-1 1.5V21a2 2 0 11-4 0v-.1a1.7 1.7 0 00-1-1.6 1.7 1.7 0 00-1.9.3l-.1.1a2 2 0 11-2.9-2.9l.1-.1a1.7 1.7 0 00.3-1.9 1.7 1.7 0 00-1.5-1H3a2 2 0 110-4h.1a1.7 1.7 0 001.6-1 1.7 1.7 0 00-.3-1.9l-.1-.1a2 2 0 112.9-2.9l.1.1a1.7 1.7 0 001.9.3h.1a1.7 1.7 0 001-1.5V3a2 2 0 114 0v.1a1.7 1.7 0 001 1.5 1.7 1.7 0 001.9-.3l.1-.1a2 2 0 112.9 2.9l-.1.1a1.7 1.7 0 00-.3 1.9v.1a1.7 1.7 0 001.5 1H21a2 2 0 110 4h-.1a1.7 1.7 0 00-1.5 1z"/></svg></span>
           <span class="theme-name">设置</span>
         </div>
+        <!-- 修正点③：⋮ 菜单是自定义 div.theme-item 弹层，不是 el-menu-item -->
+        <div class="theme-item" @click="openAiSettings()">
+          <span class="more-icon"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a7 7 0 0 1 7 7v1h1a3 3 0 0 1 0 6h-1v1a7 7 0 0 1-14 0v-1H4a3 3 0 0 1 0-6h1V9a7 7 0 0 1 7-7z"/></svg></span>
+          <span class="theme-name">AI 设置</span>
+        </div>
         <div class="theme-item" @click="exportData">
           <span class="more-icon"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12M7 10l5 5 5-5"/><path d="M4 19h16"/></svg></span>
           <span class="theme-name">导出数据（JSON）</span>
@@ -675,6 +680,71 @@
           <el-button type="primary" class="btn-icon btn-upload" @click="confirmPaste" :disabled="!pasteBlob">
             <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15V3"/><path d="M7 8l5-5 5 5"/><path d="M4 17v3h16v-3"/></svg>上传截图
           </el-button>
+        </template>
+      </el-dialog>
+
+      <!-- AI 设置对话框（自定义元素全部显式闭合） -->
+      <el-dialog v-model="aiSettingsVisible" title="AI 设置" width="560px" @close="aiTesting = false">
+        <div class="ai-settings-form">
+          <div class="ai-settings-row">
+            <span class="ai-settings-label">AI 赋能</span>
+            <el-switch v-model="aiSettings.enabled"></el-switch>
+            <span class="ai-settings-hint">开启后可用「AI 介入」；关闭时轻启动路径与现状一致</span>
+          </div>
+          <div class="ai-settings-row">
+            <span class="ai-settings-label">厂商预设</span>
+            <el-select v-model="aiSettings.provider" placeholder="选择厂商" @change="onAiProviderChange">
+              <el-option v-for="p in aiProviderOptions" :key="p.value" :label="p.label" :value="p.value"></el-option>
+            </el-select>
+          </div>
+          <div class="ai-settings-row">
+            <span class="ai-settings-label">协议</span>
+            <el-select v-model="aiSettings.protocol" placeholder="选择协议">
+              <el-option label="OpenAI 兼容" value="openai"></el-option>
+              <el-option label="Anthropic" value="anthropic"></el-option>
+              <el-option label="Gemini" value="gemini"></el-option>
+            </el-select>
+          </div>
+          <div class="ai-settings-row">
+            <span class="ai-settings-label">Base URL</span>
+            <el-input v-model="aiSettings.baseUrl" placeholder="https://…/v1" clearable></el-input>
+          </div>
+          <div class="ai-settings-row">
+            <span class="ai-settings-label">API Key</span>
+            <el-input
+              v-model="aiSettings.key"
+              type="password"
+              show-password
+              placeholder="只保存在服务端 ai.config.json，不回显"
+              @input="aiKeyTouched = true"
+            ></el-input>
+          </div>
+          <div class="ai-settings-row">
+            <span class="ai-settings-label">模型</span>
+            <el-input v-model="aiSettings.model" placeholder="如 deepseek-chat" clearable></el-input>
+          </div>
+          <div class="ai-settings-row ai-settings-row-block">
+            <span class="ai-settings-label">项目上下文</span>
+            <el-input
+              v-model="aiSettings.context"
+              type="textarea"
+              :rows="5"
+              placeholder="粘贴项目资料（md/txt 纯文本）。不解析 word/pdf。保存后服务端会预压缩为摘要供 AI 介入使用。"
+            ></el-input>
+          </div>
+          <div class="ai-settings-row">
+            <span class="ai-settings-label">连通状态</span>
+            <div class="ai-health">
+              <span v-if="aiHealth === 'none'" class="ai-health-none">未测试</span>
+              <span v-else-if="aiHealth === 'ok'" class="ai-health-ok">已连通 {{ aiLatencyMs }}ms</span>
+              <span v-else-if="aiHealth === 'bad'" class="ai-health-bad" :title="aiHealthError">失败：{{ aiHealthError }}</span>
+              <el-button size="small" :loading="aiTesting" @click="testAiConnection">测试连通</el-button>
+            </div>
+          </div>
+        </div>
+        <template #footer>
+          <el-button @click="aiSettingsVisible = false">取消</el-button>
+          <el-button type="primary" @click="saveAiSettings">保存</el-button>
         </template>
       </el-dialog>
 

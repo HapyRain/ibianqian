@@ -249,6 +249,155 @@
         window.removeEventListener('keydown', onRecordKeydown);
       });
 
+      // ==================== AI 设置（M1）====================
+      // ⚠️ 双份维护：预设表与 ai-gateway.js 的 PROVIDER_PRESETS 同步，互相注释标注来源。
+      //    新增/修改厂商时两处一起改（M2 可选改为 GET /api/ai/presets 由服务端单点下发）。
+      const AI_PRESET_BASE = {
+        mimo: '', // ai-gateway.js PROVIDER_PRESETS.mimo.baseUrl
+        deepseek: 'https://api.deepseek.com/v1',
+        glm: 'https://open.bigmodel.cn/api/paas/v4',
+        qwen: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+        kimi: 'https://api.moonshot.cn/v1',
+        openai: 'https://api.openai.com/v1',
+        ollama: 'http://127.0.0.1:11434/v1',
+        custom: '',
+      };
+      const AI_PRESET_MODEL = {
+        mimo: '', // ai-gateway.js PROVIDER_PRESETS.mimo.modelHint
+        deepseek: 'deepseek-chat',
+        glm: '',
+        qwen: '',
+        kimi: '',
+        openai: 'gpt-4o-mini',
+        ollama: '',
+        custom: '',
+      };
+      const AI_PRESET_PROTOCOL = {
+        mimo: 'openai',
+        deepseek: 'openai',
+        glm: 'openai',
+        qwen: 'openai',
+        kimi: 'openai',
+        openai: 'openai',
+        ollama: 'openai',
+        custom: 'openai',
+      };
+      const aiProviderOptions = [
+        { value: 'mimo', label: 'MiMo' },
+        { value: 'deepseek', label: 'DeepSeek' },
+        { value: 'glm', label: 'GLM 智谱' },
+        { value: 'qwen', label: 'Qwen 通义' },
+        { value: 'kimi', label: 'Kimi 月之暗面' },
+        { value: 'openai', label: 'OpenAI' },
+        { value: 'ollama', label: 'Ollama 本地' },
+        { value: 'custom', label: '自定义' },
+      ];
+      const aiSettingsVisible = ref(false);
+      const aiSettings = ref({
+        enabled: false,
+        provider: 'custom',
+        protocol: 'openai',
+        baseUrl: '',
+        key: '',
+        model: '',
+        context: '',
+        contextSummary: '',
+      });
+      const aiKeyTouched = ref(false); // key 输入框是否被用户动过（决定空值=保留还是=清空）
+      const aiTesting = ref(false);
+      const aiHealth = ref('none'); // none | ok | bad
+      const aiLatencyMs = ref(0);
+      const aiHealthError = ref('');
+      /** 服务端是否开启 AI 赋能（用于新增面板是否渲染 AI 控件；修正点D） */
+      const aiEnabled = ref(false);
+
+      function onAiProviderChange(val) {
+        const base = AI_PRESET_BASE[val];
+        const model = AI_PRESET_MODEL[val];
+        const protocol = AI_PRESET_PROTOCOL[val] || 'openai';
+        if (typeof base === 'string') aiSettings.value.baseUrl = base;
+        if (typeof model === 'string' && model) aiSettings.value.model = model;
+        aiSettings.value.protocol = protocol;
+      }
+
+      // 修正点④：统一复用 apiUrl() 助手（`${location.protocol}//${serverHost.value}${path}`）
+      async function openAiSettings() {
+        closeMoreMenu();
+        aiSettingsVisible.value = true;
+        aiHealth.value = 'none';
+        aiHealthError.value = '';
+        aiKeyTouched.value = false;
+        try {
+          const res = await fetch(apiUrl('/api/ai/config'));
+          const data = await res.json();
+          aiSettings.value = { ...data.config, key: '' }; // 明文 key 永不出服务端；keySet 随 spread 带入（normalize 会丢弃）
+          aiEnabled.value = !!data.config.enabled;
+          if (data.config.keySet) ElementPlus.ElMessage.info('服务端已保存 API Key（此处不回显）');
+        } catch (e) { ElementPlus.ElMessage.error('读取 AI 配置失败：' + e.message); }
+      }
+
+      async function saveAiSettings() {
+        // 修正点⑤：key 字段级语义——显式清空才需要确认；未动过输入框 = 省略字段 = 服务端保留
+        const payload = { ...aiSettings.value };
+        delete payload.keySet;
+        if (payload.key === '') {
+          if (!aiKeyTouched.value) delete payload.key;
+          else if (!window.confirm('Key 输入框已清空，保存将删除服务端已保存的 Key。继续？')) return;
+        }
+        try {
+          const res = await fetch(apiUrl('/api/ai/config'), {
+            method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+          });
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.error || ('HTTP ' + res.status));
+          ElementPlus.ElMessage.success('AI 配置已保存');
+          aiEnabled.value = !!data.config.enabled;
+          aiSettingsVisible.value = false;
+        } catch (e) { ElementPlus.ElMessage.error('保存失败：' + e.message); }
+      }
+
+      async function testAiConnection() {
+        // 修正点⑤：测试路径**永不弹清空确认**——空 key 时省略字段保留已存 key，
+        // 保证「已保存过 key 的用户」重测不需要重贴 key、更不会误摧毁凭据
+        aiTesting.value = true;
+        aiHealth.value = 'none';
+        aiHealthError.value = '';
+        try {
+          const payload = { ...aiSettings.value };
+          delete payload.keySet;
+          if (payload.key === '') delete payload.key;
+          const res = await fetch(apiUrl('/api/ai/config'), {
+            method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+          });
+          const saved = await res.json();
+          if (!res.ok) throw new Error(saved.error || ('HTTP ' + res.status));
+          aiEnabled.value = !!saved.config?.enabled;
+          const tres = await fetch(apiUrl('/api/ai/test'), { method: 'POST' });
+          const result = await tres.json();
+          if (result.ok) {
+            aiHealth.value = 'ok';
+            aiLatencyMs.value = result.latencyMs;
+          } else {
+            aiHealth.value = 'bad';
+            aiHealthError.value = result.error || '未知错误';
+          }
+        } catch (e) {
+          aiHealth.value = 'bad';
+          aiHealthError.value = e.message;
+        } finally {
+          aiTesting.value = false;
+        }
+      }
+
+      /** 启动时拉一次 AI 配置（决定新增面板是否渲染 AI 控件） */
+      async function refreshAiEnabled() {
+        try {
+          const res = await fetch(apiUrl('/api/ai/config'));
+          const data = await res.json();
+          aiEnabled.value = !!(data.config && data.config.enabled);
+        } catch (e) { /* 轻启动：读不到就当关闭 */ }
+      }
+
       /**
        * 导出数据：拉取 /api/export 并下载 JSON 备份
        */
@@ -3593,6 +3742,8 @@
           if (saved) currentTaskId.value = saved;
         } catch (e) { /* 静默忽略 */ }
         initStartup();
+        // AI 赋能开关：决定新增面板是否渲染 AI 控件（修正点D）
+        refreshAiEnabled();
         // 注册全局粘贴事件监听（仅粘贴对话框打开时生效）
         document.addEventListener('paste', onGlobalPaste);
         // 注册全局 Esc 监听（仅查看器打开时生效，用于关闭大图预览；onGlobalKeydown 即查看器 Esc 处理器）
@@ -3704,6 +3855,21 @@
         startRecordShortcut,
         confirmSettings,
         shortcutLabel,
+
+        // AI 设置（M1）
+        aiSettingsVisible,
+        aiSettings,
+        aiKeyTouched,
+        aiTesting,
+        aiHealth,
+        aiLatencyMs,
+        aiHealthError,
+        aiEnabled,
+        aiProviderOptions,
+        onAiProviderChange,
+        openAiSettings,
+        saveAiSettings,
+        testAiConnection,
 
         // 搜索
         searchText,
