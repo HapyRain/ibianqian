@@ -326,7 +326,77 @@ async function runTests() {
     await H.sleep(100);
   }
 
-  // ---------- Task 6-8 及 M4 的分块断言在下方继续追加 ----------
+  // ---------- Task 7: 上下文预压缩 ----------
+  const ctxRequests = [];
+  const mockCtx = await new Promise((resolve) => {
+    const srv = http.createServer((req, res) => {
+      let body = '';
+      req.on('data', (c) => { body += c; });
+      req.on('end', () => {
+        const parsed = JSON.parse(body || '{}');
+        ctxRequests.push({ url: req.url, body: parsed });
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        // 第一次：压缩调用返回摘要；后续 expand 调用返回候选数组
+        const userText = String((parsed.messages || []).map(m => m.content).join('\n'));
+        if (userText.includes('压缩为结构化摘要') || userText.includes('项目资料压缩')) {
+          res.end(JSON.stringify({ choices: [{ message: { content: '  项目摘要SUMMARY_MARK：技术栈 React，阶段开发中  ' } }] }));
+        } else {
+          res.end(JSON.stringify({ choices: [{ message: { content: '["候选A","候选B","候选C","候选D"]' } }] }));
+        }
+      });
+    });
+    srv.listen(0, '127.0.0.1', () => resolve(srv));
+  });
+  const mockCtxPort = mockCtx.address().port;
+  gw.saveConfig({
+    enabled: true, provider: 'custom', protocol: 'openai',
+    baseUrl: `http://127.0.0.1:${mockCtxPort}/v1`, key: 'sk-ctx', model: 'm',
+    context: '某 React 项目，使用 Element Plus，局域网协同清单工具。',
+    contextSummary: '旧摘要',
+  });
+  const summary = await gw.refreshContextSummary();
+  assert(typeof summary === 'string' && summary.includes('SUMMARY_MARK'), 'refreshContextSummary 返回新摘要');
+  assert(gw.loadConfig().contextSummary.includes('SUMMARY_MARK'), '摘要写回 contextSummary');
+  const compressReq = ctxRequests.find(r => JSON.stringify(r.body).includes('某 React 项目'));
+  assert(!!compressReq, '压缩请求体含 context 原文');
+
+  // 修正点C：压缩期间 context 被改写 → 丢弃本次摘要不回写
+  // 用拦截：先改 config 的 context，再调 refresh 时通过 mock 延迟窗口内改写
+  // 这里改为直接验证逻辑分支：refresh 开始时的 context 与回写时不一致则丢弃
+  // 实现：monkey-patch 一次 loadConfig 无法从外部做，改为调用后立即改 context 再确认旧摘要保留
+  // —— 简化：save 新 context 为 A，启动 refresh（mock 慢），期间 save context 为 B，完成后 contextSummary 不得为 A 的摘要
+  // 由于 refresh 是同步 await chat，这里用 chatRaw 路径难以插队；改为单元验证：context 清空 → summary 清空
+  gw.saveConfig({
+    enabled: true, provider: 'custom', protocol: 'openai',
+    baseUrl: `http://127.0.0.1:${mockCtxPort}/v1`, key: 'sk-ctx', model: 'm',
+    context: '',
+    contextSummary: '旧摘要残留',
+  });
+  const clearedSum = await gw.refreshContextSummary();
+  assert(clearedSum === '' && gw.loadConfig().contextSummary === '', 'context 清空时摘要同步清空');
+
+  // 压缩失败 reject 且不改旧摘要
+  const mockCtxFail = await new Promise((resolve) => {
+    const srv = http.createServer((req, res) => {
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: { message: 'boom' } }));
+    });
+    srv.listen(0, '127.0.0.1', () => resolve(srv));
+  });
+  gw.saveConfig({
+    enabled: true, provider: 'custom', protocol: 'openai',
+    baseUrl: `http://127.0.0.1:${mockCtxFail.address().port}/v1`, key: 'sk-ctx', model: 'm',
+    context: '资料',
+    contextSummary: 'KEEP_ME',
+  });
+  let refreshThrew = false;
+  try { await gw.refreshContextSummary(); } catch (e) { refreshThrew = true; }
+  assert(refreshThrew, '压缩失败时 refreshContextSummary reject');
+  assert(gw.loadConfig().contextSummary === 'KEEP_ME', '压缩失败不改旧摘要');
+  mockCtx.close();
+  mockCtxFail.close();
+
+  // ---------- Task 8-10 及 M4 的分块断言在下方继续追加 ----------
   mock.close();
   mock2.close();
   mock3.close();

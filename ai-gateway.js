@@ -196,6 +196,27 @@ function createAiGateway({ dataRoot }) {
     }
   }
 
+  const CONTEXT_COMPRESS_PROMPT =
+    '将以下项目资料压缩为结构化摘要（不超过 600 字）：项目方向、技术栈、设计/工程规范、当前阶段重点。' +
+    '只保留事实，不发挥。资料如下：\n';
+
+  async function refreshContextSummary() {
+    const cfg = loadConfig();
+    if (!cfg.context) {
+      const latest0 = loadConfig();
+      saveConfig({ ...latest0, contextSummary: '' });
+      return '';
+    }
+    const { content } = await chat({ messages: [{ role: 'user', content: CONTEXT_COMPRESS_PROMPT + cfg.context }], maxTokens: 800 });
+    const summary = (content || '').trim();
+    // 修正点C（回写侧）：chat 是秒级操作——回写前重读，只合并 contextSummary 字段，
+    // 避免覆盖压缩期间用户对 key/baseUrl/context 的编辑；若 context 已变则丢弃过期摘要
+    const latest = loadConfig();
+    if (latest.context !== cfg.context) return latest.contextSummary;
+    saveConfig({ ...latest, contextSummary: summary });
+    return summary;
+  }
+
   return {
     loadConfig,
     saveConfig,
@@ -205,6 +226,7 @@ function createAiGateway({ dataRoot }) {
     chatRaw,
     enqueue,
     testConnection,
+    refreshContextSummary,
   };
 }
 
