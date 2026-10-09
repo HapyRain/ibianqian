@@ -177,9 +177,46 @@ async function runTests() {
   assert(String(gemBody.contents[0].parts[0].text).includes('SYSTEM_MARK'), 'gemini 首条 user 含 system 文本（修正点B）');
   assert(String(gemBody.contents[0].parts[0].text).includes('前端太丑了'), 'gemini 首条 user 仍含用户草稿');
 
-  // ---------- Task 4-8 及 M4 的分块断言在下方继续追加 ----------
+  // ---------- Task 4: 连通探测 ----------
+  const mock3 = await new Promise((resolve) => {
+    const srv = http.createServer((req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ choices: [{ message: { content: 'pong' } }] }));
+    });
+    srv.listen(0, '127.0.0.1', () => resolve(srv));
+  });
+  gw.saveConfig({
+    enabled: true, provider: 'custom', protocol: 'openai',
+    baseUrl: `http://127.0.0.1:${mock3.address().port}/v1`, key: 'sk-p', model: 'm',
+  });
+  const ok = await gw.testConnection();
+  assert(ok.ok === true, '连通探测成功返回 ok:true');
+  assert(typeof ok.latencyMs === 'number' && ok.latencyMs >= 0, '成功返回 latencyMs');
+
+  const mock4 = await new Promise((resolve) => {
+    const srv = http.createServer((req, res) => {
+      res.writeHead(401, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: { message: 'invalid api key' } }));
+    });
+    srv.listen(0, '127.0.0.1', () => resolve(srv));
+  });
+  gw.saveConfig({
+    enabled: true, provider: 'custom', protocol: 'openai',
+    baseUrl: `http://127.0.0.1:${mock4.address().port}/v1`, key: 'sk-bad', model: 'm',
+  });
+  const bad = await gw.testConnection();
+  assert(bad.ok === false, '连通探测失败返回 ok:false');
+  assert(typeof bad.error === 'string' && bad.error.includes('401'), '失败带 HTTP 状态的 error 文本');
+
+  gw.saveConfig({ enabled: false, provider: 'custom', protocol: 'openai', baseUrl: '', key: '', model: '' });
+  const incomplete = await gw.testConnection();
+  assert(incomplete.ok === false && incomplete.error.includes('配置不完整'), '配置不完整时直接失败');
+
+  // ---------- Task 5-8 及 M4 的分块断言在下方继续追加 ----------
   mock.close();
   mock2.close();
+  mock3.close();
+  mock4.close();
   const counts = getCounts();
   console.log(`\n=== AI 网关测试结果: ${counts.passed} 通过, ${counts.failed} 失败 ===`);
   return counts;

@@ -180,6 +180,22 @@ function createAiGateway({ dataRoot }) {
     return enqueue(() => chatRaw(loadConfig(), opts));
   }
 
+  async function testConnection() {
+    // 注意：走真实 chat(maxTokens:1)——会消耗一次最小计费调用，且排在串行队列在途请求之后，
+    // UI「测试中」可能偏慢，属预期行为。
+    const cfg = loadConfig();
+    if (!cfg.baseUrl || !cfg.key || !cfg.model) {
+      return { ok: false, latencyMs: 0, error: '配置不完整：baseUrl / key / model 均必填' };
+    }
+    const t0 = Date.now();
+    try {
+      await chat({ messages: [{ role: 'user', content: 'ping' }], maxTokens: 1 });
+      return { ok: true, latencyMs: Date.now() - t0 };
+    } catch (e) {
+      return { ok: false, latencyMs: Date.now() - t0, error: e.message };
+    }
+  }
+
   return {
     loadConfig,
     saveConfig,
@@ -188,6 +204,7 @@ function createAiGateway({ dataRoot }) {
     chat,
     chatRaw,
     enqueue,
+    testConnection,
   };
 }
 
