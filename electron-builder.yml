@@ -5,6 +5,7 @@ directories:
   buildResources: build
 files:
   - server.js
+  - ai-gateway.js   # M1 网关模块：server.js 的 require 依赖，漏打=启动即崩（2026-10-09 打包验证补入）
   - public/**/*
   - electron/**/*
   - package.json
