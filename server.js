@@ -1672,6 +1672,39 @@ function createHttpHandler() {
       });
       return;
     }
+    if (req.method === 'POST' && routePath === '/api/ai/expand') {
+      let body = '';
+      let oversized = false;
+      req.on('data', (c) => {
+        if (oversized) return;
+        body += c;
+        if (body.length > 65536) {
+          oversized = true;
+          res.writeHead(413, { 'Content-Type': 'text/plain; charset=utf-8' });
+          res.end('Payload Too Large');
+          req.destroy();
+        }
+      });
+      req.on('end', () => {
+        if (oversized) return;
+        // 修正点D：轻启动承诺——enabled=false 一律降级，绝不调模型（决策 1）
+        if (!aiGateway.loadConfig().enabled) {
+          res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+          res.end(JSON.stringify({ candidates: [], error: 'AI 赋能未开启' }));
+          return;
+        }
+        let draft = '';
+        try { draft = String(JSON.parse(body || '{}').draft || '').slice(0, 2000); } catch (e) { /* 按空串走降级 */ }
+        aiGateway.expandDraft(draft).then(({ candidates }) => {
+          res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+          res.end(JSON.stringify({ candidates }));
+        }).catch((e) => {
+          res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+          res.end(JSON.stringify({ candidates: [], error: e.message })); // 降级：前端保留原文提交出口
+        });
+      });
+      return;
+    }
 
     // API 路由：数据导出 / 导入
     // 注：前端/Electron 均同源访问（loadURL http://localhost:port），不再返回 CORS 通配头——

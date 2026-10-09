@@ -217,6 +217,34 @@ function createAiGateway({ dataRoot }) {
     return summary;
   }
 
+  const DRAFT_EXPAND_PROMPT =
+    '你是需求表达助手。基于项目背景，把用户的一句口语化草稿扩展为 3-5 个结构化候选方向。' +
+    '每个候选一句话：指出草稿背后可能的具体问题。只提案不评判，不评分，不判断对错。' +
+    '严格输出 JSON 字符串数组，不要其他文字。';
+
+  async function expandDraft(draft) {
+    if (typeof draft !== 'string' || !draft.trim()) throw new Error('草稿为空'); // 修正点F：空草稿不打上游
+    const cfg = loadConfig();
+    if (!cfg.key || !cfg.baseUrl || !cfg.model) throw new Error('AI 配置不完整：baseUrl / key / model 均必填');
+    const system = DRAFT_EXPAND_PROMPT + (cfg.contextSummary ? '\n项目背景：\n' + cfg.contextSummary : '');
+    return enqueue(async () => {
+      // 已在 enqueue 内 → 只能用 chatRaw（B1），调 chat() 会二次入队死锁
+      for (let attempt = 0; attempt < 2; attempt++) {
+        try {
+          const { content } = await chatRaw(cfg, {
+            messages: [{ role: 'system', content: system }, { role: 'user', content: draft }],
+            maxTokens: 600,
+          });
+          const arr = JSON.parse(content);
+          if (Array.isArray(arr) && arr.length >= 3 && arr.length <= 5 && arr.every((s) => typeof s === 'string' && s.trim())) {
+            return { candidates: arr.map((s) => s.trim()) };
+          }
+        } catch (e) { /* 重试一次 */ }
+      }
+      throw new Error('AI 未能组织出有效候选（已重试）');
+    });
+  }
+
   return {
     loadConfig,
     saveConfig,
@@ -227,6 +255,7 @@ function createAiGateway({ dataRoot }) {
     enqueue,
     testConnection,
     refreshContextSummary,
+    expandDraft,
   };
 }
 

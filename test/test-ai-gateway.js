@@ -396,7 +396,199 @@ async function runTests() {
   mockCtx.close();
   mockCtxFail.close();
 
-  // ---------- Task 8-10 及 M4 的分块断言在下方继续追加 ----------
+  // ---------- Task 8: 候选扩展 expandDraft + /api/ai/expand ----------
+  const expandRequests = [];
+  const mockExpand = await new Promise((resolve) => {
+    const srv = http.createServer((req, res) => {
+      let body = '';
+      req.on('data', (c) => { body += c; });
+      req.on('end', () => {
+        const parsed = JSON.parse(body || '{}');
+        expandRequests.push({ url: req.url, body: parsed });
+        const mode = expandRequests.length;
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        if (mode === 1) {
+          res.end(JSON.stringify({ choices: [{ message: { content: '["色彩过于奔放","布局拥挤缺层级","动效干扰阅读","主题与品牌不搭"]' } }] }));
+        } else if (mode === 2) {
+          // 非 JSON → 触发重试
+          res.end(JSON.stringify({ choices: [{ message: { content: '这不是 JSON' } }] }));
+        } else if (mode === 3) {
+          res.end(JSON.stringify({ choices: [{ message: { content: '["重试后的A","重试后的B","重试后的C"]' } }] }));
+        } else if (mode === 4) {
+          res.end(JSON.stringify({ choices: [{ message: { content: '["只有1个"]' } }] }));
+        } else {
+          res.end(JSON.stringify({ choices: [{ message: { content: '["x","y","z"]' } }] }));
+        }
+      });
+    });
+    srv.listen(0, '127.0.0.1', () => resolve(srv));
+  });
+  const mockExpandPort = mockExpand.address().port;
+  gw.saveConfig({
+    enabled: true, provider: 'custom', protocol: 'openai',
+    baseUrl: `http://127.0.0.1:${mockExpandPort}/v1`, key: 'sk-ex', model: 'm',
+    context: '项目背景CTX_MARK',
+    contextSummary: '摘要SUM_MARK',
+  });
+  const beforeExpand = expandRequests.length;
+  const expanded = await gw.expandDraft('前端太丑了');
+  assert(Array.isArray(expanded.candidates) && expanded.candidates.length >= 3 && expanded.candidates.length <= 5,
+    'expandDraft 返回 3-5 个候选');
+  assert(expandRequests.length === beforeExpand + 1, '一次调用只产生 1 次上游请求');
+  assert(JSON.stringify(expandRequests[beforeExpand].body).includes('SUM_MARK'), '请求体含 contextSummary');
+
+  // 空/纯空白 draft → 立即 reject，不发上游
+  const beforeEmpty = expandRequests.length;
+  let emptyThrew = false;
+  try { await gw.expandDraft('   '); } catch (e) { emptyThrew = true; }
+  assert(emptyThrew, '空白 draft 立即 reject');
+  assert(expandRequests.length === beforeEmpty, '空白 draft 不发上游请求');
+
+  // 非 JSON → 自动重试一次（共 2 次）→ 仍失败 → reject
+  // mode 2 是非 JSON，mode 3 是合法——单独起一个只回非 JSON 的 mock
+  const mockBadJson = await new Promise((resolve) => {
+    let n = 0;
+    const srv = http.createServer((req, res) => {
+      n += 1;
+      let body = '';
+      req.on('data', (c) => { body += c; });
+      req.on('end', () => {
+        expandRequests.push({ url: req.url, body: JSON.parse(body || '{}'), bad: true, n });
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ choices: [{ message: { content: 'not-json-at-all' } }] }));
+      });
+    });
+    srv.listen(0, '127.0.0.1', () => resolve(srv));
+  });
+  const beforeRetry = expandRequests.length;
+  let retryThrew = false;
+  try {
+    await gw.saveConfig({
+      enabled: true, provider: 'custom', protocol: 'openai',
+      baseUrl: `http://127.0.0.1:${mockBadJson.address().port}/v1`, key: 'sk-ex', model: 'm',
+      contextSummary: 'S',
+    });
+    await gw.expandDraft('再想想');
+  } catch (e) { retryThrew = true; }
+  const retryCount = expandRequests.length - beforeRetry;
+  assert(retryThrew, '两次都非 JSON 时 reject');
+  assert(retryCount === 2, '格式错误自动重试一次（共 2 次请求）');
+
+  // 归一化：超长/空数组 → reject（不在 3-5）
+  gw.saveConfig({
+    enabled: true, provider: 'custom', protocol: 'openai',
+    baseUrl: `http://127.0.0.1:${mockExpand.address().port}/v1`, key: 'sk-ex', model: 'm',
+    contextSummary: 'S',
+  });
+  // mockExpand 第 4 次会返回 ["只有1个"]——但请求计数已乱，改为专用 mock
+  const mockShort = await new Promise((resolve) => {
+    const srv = http.createServer((req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ choices: [{ message: { content: '["只有1个"]' } }] }));
+    });
+    srv.listen(0, '127.0.0.1', () => resolve(srv));
+  });
+  gw.saveConfig({
+    enabled: true, provider: 'custom', protocol: 'openai',
+    baseUrl: `http://127.0.0.1:${mockShort.address().port}/v1`, key: 'sk-ex', model: 'm',
+    contextSummary: 'S',
+  });
+  let shortThrew = false;
+  try { await gw.expandDraft('太少'); } catch (e) { shortThrew = true; }
+  assert(shortThrew, '候选数不在 3-5 时 reject（已重试）');
+
+  // HTTP /api/ai/expand：enabled=false 恒 200 且 candidates:[]（修正点D）
+  let httpServer2 = null;
+  try {
+    const started2 = await startServer(3050);
+    httpServer2 = started2.httpServer;
+    const port2 = started2.port;
+    const postExpand = (obj) => new Promise((resolve, reject) => {
+      const body = typeof obj === 'string' ? obj : JSON.stringify(obj);
+      const req = http.request({
+        host: 'localhost', port: port2, path: '/api/ai/expand', method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
+      }, (res) => {
+        let t = ''; res.on('data', (c) => { t += c; });
+        res.on('end', () => {
+          let parsed = {};
+          try { parsed = JSON.parse(t || '{}'); } catch (e) { /* ignore */ }
+          resolve({ statusCode: res.statusCode, body: parsed });
+        });
+      });
+      req.on('error', reject);
+      req.end(body);
+    });
+
+    // 先关 enabled
+    const putCfg2 = (obj) => new Promise((resolve, reject) => {
+      const body = JSON.stringify(obj);
+      const req = http.request({
+        host: 'localhost', port: port2, path: '/api/ai/config', method: 'PUT',
+        headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
+      }, (res) => {
+        let t = ''; res.on('data', (c) => { t += c; });
+        res.on('end', () => resolve({ statusCode: res.statusCode, body: JSON.parse(t || '{}') }));
+      });
+      req.on('error', reject);
+      req.end(body);
+    });
+    await putCfg2({
+      enabled: false, provider: 'custom', protocol: 'openai',
+      baseUrl: 'http://127.0.0.1:1/v1', key: 'sk-off', model: 'm',
+    });
+    const beforeOff = expandRequests.length;
+    const offRes = await postExpand({ draft: '前端太丑了' });
+    assert(offRes.statusCode === 200, 'enabled=false 时 expand 恒 200');
+    assert(Array.isArray(offRes.body.candidates) && offRes.body.candidates.length === 0, 'enabled=false 时 candidates 空');
+    assert(typeof offRes.body.error === 'string' && offRes.body.error.includes('未开启'), 'enabled=false 时 error 含未开启');
+    assert(expandRequests.length === beforeOff, 'enabled=false 不发上游请求');
+
+    // enabled=true + mock 成功路径
+    await putCfg2({
+      enabled: true, provider: 'custom', protocol: 'openai',
+      baseUrl: `http://127.0.0.1:${mockExpand.address().port}/v1`, key: 'sk-ex', model: 'm',
+      contextSummary: 'SUM_MARK',
+    });
+    // mockExpand 已被用过多次，直接用 mockShort 返回单元素会被 reject 降级——用新 mock
+    const mockHttpOk = await new Promise((resolve) => {
+      const srv = http.createServer((req, res) => {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ choices: [{ message: { content: '["HTTP候选1","HTTP候选2","HTTP候选3"]' } }] }));
+      });
+      srv.listen(0, '127.0.0.1', () => resolve(srv));
+    });
+    await putCfg2({
+      enabled: true, provider: 'custom', protocol: 'openai',
+      baseUrl: `http://127.0.0.1:${mockHttpOk.address().port}/v1`, key: 'sk-ex', model: 'm',
+      contextSummary: 'SUM_MARK',
+    });
+    const okRes = await postExpand({ draft: '前端太丑了' });
+    assert(okRes.statusCode === 200 && okRes.body.candidates.length === 3, 'expand 成功返回 3 候选');
+
+    // 畸形 body 降级不崩
+    for (const bad of ['null', '"str"', '123', '[]', '{']) {
+      const r = await postExpand(bad);
+      assert(r.statusCode === 200, `expand 畸形 body ${bad} → 200 降级`);
+      assert(Array.isArray(r.body.candidates), `expand 畸形 body ${bad} candidates 为数组`);
+    }
+    const alive2 = await new Promise((resolve, reject) => {
+      http.get({ host: 'localhost', port: port2, path: '/api/ai/config' }, (res) => {
+        res.resume();
+        res.on('end', () => resolve(res.statusCode));
+      }).on('error', reject);
+    });
+    assert(alive2 === 200, 'expand 畸形 body 后进程存活');
+    mockHttpOk.close();
+  } finally {
+    if (httpServer2) { try { httpServer2.close(); } catch (e) { /* ignore */ } }
+    await H.sleep(100);
+  }
+  mockExpand.close();
+  mockBadJson.close();
+  mockShort.close();
+
+  // ---------- Task 9-10 的分块断言在下方继续追加 ----------
   mock.close();
   mock2.close();
   mock3.close();
