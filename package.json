@@ -11,7 +11,7 @@
     "dev": "node --watch server.js",
     "electron": "electron .",
     "build": "electron-builder --win portable --config electron-builder.yml",
-    "test": "node test/test-validation-guards.js && node test/test-image-lifecycle.js && node test/test-note-image.js && node test/test-note-ownership.js && node test/test-template-guard.js && node test/test-archive-guards.js && node test/test-crash-hardening.js && node test/test-delete-task.js && node test/test-sync-basics.js && node test/test-export-import.js && node test/test-completed-at.js && node test/test-protocol-consistency.js",
+    "test": "node test/test-ai-gateway.js && node test/test-ai-intake.js && node test/test-validation-guards.js && node test/test-image-lifecycle.js && node test/test-note-image.js && node test/test-note-ownership.js && node test/test-template-guard.js && node test/test-archive-guards.js && node test/test-crash-hardening.js && node test/test-delete-task.js && node test/test-sync-basics.js && node test/test-export-import.js && node test/test-completed-at.js && node test/test-protocol-consistency.js",
     "postinstall": "node build/setup-7za-proxy.js"
   },
   "dependencies": {
