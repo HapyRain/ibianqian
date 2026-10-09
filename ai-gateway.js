@@ -120,11 +120,56 @@ function createAiGateway({ dataRoot }) {
     return { content, raw: json };
   }
 
+  async function chatAnthropic(cfg, opts) {
+    const base = cfg.baseUrl.replace(/\/+$/, '');
+    const system = (opts.messages || []).filter(m => m.role === 'system').map(m => m.content).join('\n');
+    const rest = (opts.messages || []).filter(m => m.role !== 'system')
+      .map(m => ({ role: m.role === 'assistant' ? 'assistant' : 'user', content: m.content }));
+    const json = await jsonFetch(base + '/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': cfg.key,
+        'anthropic-version': '2023-06-01',
+      },
+      body: JSON.stringify({
+        model: cfg.model,
+        max_tokens: opts.maxTokens ?? 1024,
+        ...(system ? { system } : {}),
+        messages: rest,
+      }),
+    }, cfg.key);
+    const content = (json && json.content || []).map(p => (p && p.text) || '').join('');
+    return { content, raw: json };
+  }
+
+  async function chatGemini(cfg, opts) {
+    const base = cfg.baseUrl.replace(/\/+$/, '');
+    const system = (opts.messages || []).filter(m => m.role === 'system').map(m => m.content).join('\n');
+    const rest = (opts.messages || []).filter(m => m.role !== 'system').map(m => ({ ...m }));
+    // 修正点B：gemini 无独立 system 字段——system 文本必须并入首条 user，否则展开提示词/项目背景全部丢失
+    if (system && rest.length && rest[0].role === 'user') {
+      rest[0] = { ...rest[0], content: system + '\n\n' + rest[0].content };
+    } else if (system) {
+      rest.unshift({ role: 'user', content: system });
+    }
+    const contents = rest.map(m => ({ role: m.role === 'assistant' ? 'model' : 'user', parts: [{ text: m.content }] }));
+    const url = base + '/v1beta/models/' + encodeURIComponent(cfg.model) + ':generateContent';
+    const json = await jsonFetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-goog-api-key': cfg.key },
+      body: JSON.stringify({ contents, generationConfig: { maxOutputTokens: opts.maxTokens ?? 1024 } }),
+    }, cfg.key);
+    const parts = (json && json.candidates && json.candidates[0] && json.candidates[0].content
+      && json.candidates[0].content.parts) || [];
+    return { content: parts.map(p => (p && p.text) || '').join(''), raw: json };
+  }
+
   // 不入队的底层调用：读配置齐备性 → 按协议分流。已被 enqueue 包裹的调用方（expandDraft）只能用它。
   // ⚠️ 禁止在 enqueue 内调用 chat()——会二次入队：外层任务等内层、内层排在外层之后 = 死锁。
   async function chatRaw(cfg, opts) {
     if (!cfg.key || !cfg.baseUrl || !cfg.model) throw new Error('AI 配置不完整：baseUrl / key / model 均必填');
-    if (cfg.protocol === 'anthropic') return chatAnthropic(cfg, opts); // Task 3 实现前先 throw
+    if (cfg.protocol === 'anthropic') return chatAnthropic(cfg, opts);
     if (cfg.protocol === 'gemini') return chatGemini(cfg, opts);
     return chatOpenAICompat(cfg, opts);
   }
@@ -133,14 +178,6 @@ function createAiGateway({ dataRoot }) {
   // enabled 门控在路由层（/api/ai/expand）与前端入口；chat 本身不拦（testConnection 需要在 enabled=false 时可用）
   async function chat(opts) {
     return enqueue(() => chatRaw(loadConfig(), opts));
-  }
-
-  // Task 3 占位：骨架已建，实现落地前抛错
-  async function chatAnthropic(_cfg, _opts) {
-    throw new Error('anthropic 协议适配尚未实现');
-  }
-  async function chatGemini(_cfg, _opts) {
-    throw new Error('gemini 协议适配尚未实现');
   }
 
   return {

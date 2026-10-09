@@ -102,8 +102,84 @@ async function runTests() {
   assert(order.join('') === 'AB', '并发 chat 串行执行（A 先 B 后）');
   assert(requests.length === 3, '两次并发 chat 共产生 2 个新请求（+此前 1 个）');
 
-  // ---------- Task 3-8 及 M4 的分块断言在下方继续追加 ----------
+  // ---------- Task 3: anthropic / gemini 适配 ----------
+  requests.length = 0;
+  const mock2 = await new Promise((resolve) => {
+    const srv = http.createServer((req, res) => {
+      let body = '';
+      req.on('data', (c) => { body += c; });
+      req.on('end', () => {
+        requests.push({
+          method: req.method, url: req.url,
+          auth: req.headers['x-api-key'] || req.headers['x-goog-api-key'] || req.headers.authorization || '',
+          headers: req.headers,
+          body: JSON.parse(body || '{}'),
+        });
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        if (req.url.startsWith('/v1/messages')) {
+          res.end(JSON.stringify({ content: [{ type: 'text', text: 'claude-reply' }] }));
+        } else if (req.url.includes(':generateContent')) {
+          res.end(JSON.stringify({ candidates: [{ content: { parts: [{ text: 'gemini-reply' }] } }] }));
+        } else {
+          res.end(JSON.stringify({ choices: [{ message: { content: 'openai-reply' } }] }));
+        }
+      });
+    });
+    srv.listen(0, '127.0.0.1', () => resolve(srv));
+  });
+  const mock2Port = mock2.address().port;
+
+  gw.saveConfig({
+    enabled: true, provider: 'custom', protocol: 'anthropic',
+    baseUrl: `http://127.0.0.1:${mock2Port}`, key: 'sk-ant', model: 'claude-x',
+  });
+  const ant = await gw.chat({ messages: [{ role: 'user', content: 'hi' }] });
+  assert(ant.content === 'claude-reply', 'anthropic 适配返回 content[0].text');
+  assert(requests[0].url === '/v1/messages', 'anthropic 路径 /v1/messages');
+  assert(requests[0].auth === 'sk-ant', 'anthropic 用 x-api-key 认证');
+  assert(requests[0].headers['anthropic-version'] === '2023-06-01', 'anthropic 带 anthropic-version');
+  assert(requests[0].body.model === 'claude-x', 'anthropic 请求体带 model');
+  assert(requests[0].body.max_tokens === 1024, 'anthropic 默认 max_tokens=1024');
+
+  gw.saveConfig({
+    enabled: true, provider: 'custom', protocol: 'gemini',
+    baseUrl: `http://127.0.0.1:${mock2Port}`, key: 'gm-key', model: 'gemini-x',
+  });
+  const gem = await gw.chat({ messages: [{ role: 'user', content: 'hi' }] });
+  assert(gem.content === 'gemini-reply', 'gemini 适配返回 candidates[0].content.parts[0].text');
+  assert(requests[1].url.includes('/v1beta/models/gemini-x:generateContent'), 'gemini 路径含 model:generateContent');
+  assert(requests[1].auth === 'gm-key', 'gemini 用 x-goog-api-key 认证');
+
+  // anthropic system 拆顶层
+  requests.length = 0;
+  gw.saveConfig({
+    enabled: true, provider: 'custom', protocol: 'anthropic',
+    baseUrl: `http://127.0.0.1:${mock2Port}`, key: 'sk-ant', model: 'claude-x',
+  });
+  await gw.chat({ messages: [{ role: 'system', content: '你是助手' }, { role: 'user', content: 'hi' }] });
+  assert(requests[0].body.system === '你是助手', 'anthropic system 进顶层 system 字段');
+  assert(requests[0].body.messages.length === 1 && requests[0].body.messages[0].role === 'user', 'anthropic messages 不含 system');
+
+  // 修正点B：gemini 不丢 system——并入首条 user
+  requests.length = 0;
+  gw.saveConfig({
+    enabled: true, provider: 'custom', protocol: 'gemini',
+    baseUrl: `http://127.0.0.1:${mock2Port}`, key: 'gm-key', model: 'gemini-x',
+  });
+  await gw.chat({
+    messages: [
+      { role: 'system', content: '展开提示词SYSTEM_MARK' },
+      { role: 'user', content: '前端太丑了' },
+    ],
+  });
+  const gemBody = requests[0].body;
+  assert(Array.isArray(gemBody.contents) && gemBody.contents.length >= 1, 'gemini contents 非空');
+  assert(String(gemBody.contents[0].parts[0].text).includes('SYSTEM_MARK'), 'gemini 首条 user 含 system 文本（修正点B）');
+  assert(String(gemBody.contents[0].parts[0].text).includes('前端太丑了'), 'gemini 首条 user 仍含用户草稿');
+
+  // ---------- Task 4-8 及 M4 的分块断言在下方继续追加 ----------
   mock.close();
+  mock2.close();
   const counts = getCounts();
   console.log(`\n=== AI 网关测试结果: ${counts.passed} 通过, ${counts.failed} 失败 ===`);
   return counts;
